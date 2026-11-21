@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DataClean · 后台任务进度</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css">
+{{META_REFRESH}}
+</head>
+<body class="{{BODY_CLASS}}">
+{{NAV}}
+
+<div class="page-wrap">
+  <section class="hero">
+    <div class="kicker">Async Job · Live Progress</div>
+    <h1>后台任务进度</h1>
+    <p>异步任务在独立线程执行，页面每 2 秒自动刷新。可以离开本页去处理别的事情，稍后从「后台任务」列表回来查看结果；完成后会自动跳转到对应结果页。</p>
+  </section>
+
+  <div class="card" style="margin-top:18px">
+    <h2>{{TITLE}}</h2>
+    {{STATUS}}
+    {{PROGRESS}}
+    {{DETAIL}}
+    <div class="btn-row">{{ACTIONS}}</div>
+  </div>
+
+  {{RECENT}}
+</div>
+
+{{FOOTER}}
+{{CONTROLS}}
+{{LOADING}}
+</body>
+</html>

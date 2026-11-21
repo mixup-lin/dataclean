@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DataClean · 后台任务列表</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css">
+{{META_REFRESH}}
+</head>
+<body class="{{BODY_CLASS}}">
+{{NAV}}
+
+<div class="page-wrap">
+  <section class="hero">
+    <div class="kicker">Async Job · History</div>
+    <h1>后台任务</h1>
+    <p>当前进程内提交的异步任务（文档抽取等）。任务状态保存在内存中，重启服务后不会恢复；仍在执行的任务会自动刷新进度。</p>
+  </section>
+
+  <div class="card" style="margin-top:18px">
+    <h2>最近任务</h2>
+    <p class="hint">点击「查看进度 / 结果」进入任务页；已完成的任务会直接展示抽取结果或跳转到规则执行结果。</p>
+    {{JOBS_TABLE}}
+    <div class="btn-row">
+      <a class="btn btn-ghost" href="/extract">新建文档抽取任务</a>
+      <a class="btn btn-ghost" href="/">返回工作台</a>
+    </div>
+  </div>
+</div>
+
+{{FOOTER}}
+{{CONTROLS}}
+{{LOADING}}
+</body>
+</html>

@@ -1,0 +1,70 @@
+{
+  "id": "r20261115213139_8869e4",
+  "name": "福州2026各小区统计",
+  "intent": "筛选市是福州，结束时间在2026年，小区不为空的数据，按小区分组，统计每个小区有几条数据",
+  "created_at": "2026-11-15 21:31:39",
+  "updated_at": "2026-11-15 21:31:39",
+  "task_type": "summary",
+  "op_count": 3,
+  "source_path": "lots.csv",
+  "rule": {
+    "version": "2.0",
+    "intent": "筛选市是福州，结束时间在2026年，小区不为空的数据，按小区分组，统计每个小区有几条数据",
+    "task_type": "summary",
+    "source": {
+      "path": "lots.csv",
+      "format": "csv"
+    },
+    "options": {
+      "drop_duplicates": true,
+      "fill_missing": "drop",
+      "outlier_method": "none",
+      "outlier_threshold": 1.5,
+      "normalize_columns": false,
+      "clean_text": false,
+      "drop_empty_cols": false,
+      "drop_constant_cols": true,
+      "max_charts": 6,
+      "group_by": "小区",
+      "agg_funcs": [
+        "count"
+      ],
+      "time_column": "结束时间",
+      "resample_freq": "",
+      "encoding": "utf-8"
+    },
+    "steps": [
+      {
+        "op": "filter",
+        "conditions": [
+          {
+            "column": "市",
+            "operator": "eq",
+            "value": "福州"
+          },
+          {
+            "column": "小区",
+            "operator": "notna"
+          }
+        ],
+        "logic": "and"
+      },
+      {
+        "op": "date_filter",
+        "column": "结束时间",
+        "year": 2026
+      },
+      {
+        "op": "count_rows",
+        "by": "小区",
+        "alias": "条数"
+      }
+    ],
+    "output": {
+      "formats": [
+        "csv"
+      ],
+      "report": true
+    }
+  }
+}

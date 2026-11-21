@@ -1,0 +1,64 @@
+{
+  "id": "r20261115211408_d34c72",
+  "name": "福州2026年·各小区条数统计",
+  "intent": "筛选市是福州，结束时间在2026年，小区不为空的数据，按小区分组，统计每个小区有几条数据",
+  "created_at": "2026-11-15 21:14:08",
+  "updated_at": "2026-11-15 21:14:08",
+  "task_type": "summary",
+  "op_count": 4,
+  "source_path": "lots.csv",
+  "rule": {
+    "version": "2.0",
+    "intent": "筛选市是福州，结束时间在2026年，小区不为空的数据，按小区分组，统计每个小区有几条数据",
+    "task_type": "summary",
+    "source": {
+      "path": "lots.csv",
+      "format": "csv"
+    },
+    "options": {
+      "fill_missing": "median",
+      "outlier_method": "none",
+      "drop_duplicates": false,
+      "max_charts": 6
+    },
+    "steps": [
+      {
+        "op": "filter",
+        "conditions": [
+          {
+            "column": "市",
+            "operator": "eq",
+            "value": "福州"
+          },
+          {
+            "column": "小区",
+            "operator": "notna"
+          }
+        ],
+        "logic": "and"
+      },
+      {
+        "op": "date_filter",
+        "column": "结束时间",
+        "year": 2026
+      },
+      {
+        "op": "count_rows",
+        "by": "小区",
+        "alias": "条数"
+      },
+      {
+        "op": "sort",
+        "by": "条数",
+        "ascending": false
+      }
+    ],
+    "output": {
+      "formats": [
+        "csv",
+        "xlsx"
+      ],
+      "report": true
+    }
+  }
+}

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}} · 任务报告</title>
+<link rel="icon" href="data:,">
+<style>{{STYLE}}</style>
+</head>
+<body class="report-body">
+<div class="page-wrap report-wrap">
+
+  <section class="hero report-hero">
+    <div class="kicker">{{KICKER}}</div>
+    <h1>{{TITLE}}</h1>
+    <p>{{SUBTITLE}}</p>
+    <span class="task-badge">{{BADGE}}</span>
+  </section>
+
+  <div class="report-meta">{{META}}</div>
+
+  <!-- 章节由任务画像的 panels 声明按场景动态生成（趋势/明细/占比/排名等各不相同） -->
+  {{SECTIONS}}
+
+</div>
+<footer class="footer">{{FOOTER}}</footer>
+</body>
+</html>

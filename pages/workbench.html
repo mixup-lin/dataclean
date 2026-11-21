@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DataClean 工作台 · 自然语言规则</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="{{BODY_CLASS}}">
+{{NAV}}
+
+<div class="page-wrap">
+  <section class="hero">
+    <div class="kicker">Natural Language → Rules → Execution</div>
+    <h1>自然语言数据处理工作台</h1>
+    <p>用一句话描述统计、清洗与整理需求，系统自动生成可查看、可编辑、可校验的处理规则，并按规则执行完整流程，产出任务结果、图表与可下载报告。</p>
+    <img class="hero-art" alt="" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='240'%20height='120'%3E%3Cdefs%3E%3ClinearGradient%20id='g'%3E%3Cstop%20stop-color='%231E3A8A'/%3E%3Cstop%20offset='1'%20stop-color='%230EA5E9'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect%20width='240'%20height='120'%20rx='18'%20fill='url(%23g)'/%3E%3Ctext%20x='120'%20y='68'%20text-anchor='middle'%20font-family='Arial'%20font-size='19'%20fill='white'%3EETL%20Flow%3C/text%3E%3C/svg%3E"
+         onerror="this.style.display='none'">
+  </section>
+
+  <div class="steps">
+    <div class="step active"><div class="num">1</div><div><div class="st">输入需求</div><div class="sd">自然语言 + 数据源</div></div></div>
+    <div class="step {{STEP2}}"><div class="num">2</div><div><div class="st">生成规则</div><div class="sd">LLM → 规则 JSON</div></div></div>
+    <div class="step {{STEP3}}"><div class="num">3</div><div><div class="st">校验执行</div><div class="sd">白名单 → 管道</div></div></div>
+    <div class="step {{STEP4}}"><div class="num">4</div><div><div class="st">导出查看</div><div class="sd">结果 + 报告</div></div></div>
+  </div>
+
+  <div class="grid two">
+    <div class="card">
+      <h2>需求输入</h2>
+      <p class="hint">输入：自然语言需求描述 + 主表（可再加 2 个附加表）。任务标签点击后自动回填需求。</p>
+      <form method="post" action="/plan" enctype="multipart/form-data"
+            data-stages="读取数据源并探测列名,调用 LLM 生成规则 JSON,白名单校验与规整,执行清洗与算子管道,生成结果与报告">
+        <label class="field"><span>自然语言需求描述</span>
+          <textarea name="intent" rows="4" placeholder="例如：各小区成交套数占比，按占比降序，帕累托；或：按小区关联维表后统计成交套数并排名">{{INTENT}}</textarea>
+        </label>
+        <div class="chips">{{EXAMPLES}}</div>
+
+        <div class="row">
+          <label class="field"><span>主表路径</span>
+            <input type="text" name="source_path" value="{{SOURCE_PATH}}" placeholder="lots.csv">
+          </label>
+          <label class="field"><span>主表格式</span>{{SOURCE_FORMAT_OPTIONS}}</label>
+        </div>
+        <label class="field"><span>或上传主表文件（CSV / TSV / JSON / Excel / SQLite，≤20MB）</span>
+          <input type="file" name="source_file" accept=".csv,.tsv,.txt,.json,.xlsx,.xls,.db,.sqlite,.sqlite3">
+        </label>
+
+        <details class="source-box" {{EXTRA1_OPEN}}>
+          <summary>附加表 1（维表 / 待合并表，可选）</summary>
+          <p class="hint">填写别名后即可在需求里引用，例如「按小区关联维表」。关联键留空时自动按同名列匹配。</p>
+          <div class="row">
+            <label class="field"><span>别名（如 dim）</span><input type="text" name="extra1_alias" value="{{EXTRA1_ALIAS}}" placeholder="dim"></label>
+            <label class="field"><span>关联方式</span><select name="extra1_how">{{EXTRA1_HOW_OPTIONS}}</select></label>
+          </div>
+          <div class="row">
+            <label class="field"><span>表路径</span><input type="text" name="extra1_path" value="{{EXTRA1_PATH}}" placeholder="communities.csv"></label>
+            <label class="field"><span>格式</span>{{EXTRA1_FORMAT_OPTIONS}}</label>
+          </div>
+          <label class="field"><span>或上传文件</span>
+            <input type="file" name="extra1_file" accept=".csv,.tsv,.txt,.json,.xlsx,.xls,.db,.sqlite,.sqlite3">
+          </label>
+          <div class="row">
+            <label class="field"><span>主表关联键</span><input type="text" name="extra1_key" value="{{EXTRA1_KEY}}" placeholder="小区"></label>
+            <label class="field"><span>附加表关联键</span><input type="text" name="extra1_right_key" value="{{EXTRA1_RIGHT_KEY}}" placeholder="小区名称"></label>
+          </div>
+        </details>
+
+        <details class="source-box" {{EXTRA2_OPEN}}>
+          <summary>附加表 2（可选）</summary>
+          <p class="hint">用于第二张维表或纵向合并的补充表，最多 5 个数据源（含主表）。</p>
+          <div class="row">
+            <label class="field"><span>别名</span><input type="text" name="extra2_alias" value="{{EXTRA2_ALIAS}}" placeholder="dim2"></label>
+            <label class="field"><span>关联方式</span><select name="extra2_how">{{EXTRA2_HOW_OPTIONS}}</select></label>
+          </div>
+          <div class="row">
+            <label class="field"><span>表路径</span><input type="text" name="extra2_path" value="{{EXTRA2_PATH}}" placeholder="districts.csv"></label>
+            <label class="field"><span>格式</span>{{EXTRA2_FORMAT_OPTIONS}}</label>
+          </div>
+          <label class="field"><span>或上传文件</span>
+            <input type="file" name="extra2_file" accept=".csv,.tsv,.txt,.json,.xlsx,.xls,.db,.sqlite,.sqlite3">
+          </label>
+          <div class="row">
+            <label class="field"><span>主表关联键</span><input type="text" name="extra2_key" value="{{EXTRA2_KEY}}" placeholder="区县"></label>
+            <label class="field"><span>附加表关联键</span><input type="text" name="extra2_right_key" value="{{EXTRA2_RIGHT_KEY}}" placeholder="区县名称"></label>
+          </div>
+        </details>
+
+        <label class="field"><span>可用列名（可选，逗号分隔；留空自动探测）</span>
+          <input type="text" name="columns" value="{{COLUMNS}}" placeholder="留空自动探测">
+        </label>
+        {{COLUMN_HINTS}}
+
+        <label class="field"><span>列名映射（可选：中文描述 = 真实列名，每行一条，<code>#</code> 开头为注释）</span>
+          <textarea name="column_aliases" rows="3" placeholder="地区 = city&#10;结束时间 = end_time&#10;小区 = community">{{COLUMN_ALIASES}}</textarea>
+        </label>
+        <p class="hint">描述里用中文、列名是英文（或二者不同名）时，在这里逐行给出对应关系；未给出的名称不做任何自动猜测。</p>
+
+        <label class="field"><span>使用已保存规则（可选：直接复用，跳过 LLM 生成）</span>
+          <select name="saved_rule_id">{{SAVED_RULE_OPTIONS}}</select>
+        </label>
+        <p class="hint">选择规则库中的规则后，系统会直接采用该规则，不再调用 LLM；规则内自带数据源。</p>
+        <label class="field"><span>显式规则 JSON（可选：无需 LLM，离线直接生成/执行）</span>
+          <textarea class="code" name="rule_json" rows="3" placeholder='留空则由 LLM 生成；填入 {"version":"2.0", ...} 时直接采用该规则'>{{RULE_INPUT_JSON}}</textarea>
+        </label>
+        <p class="hint">未配置 LLM_API_KEY 时，请在此粘贴规则 JSON，或在上方选择已保存规则；也可用命令行 <code>--rule-file</code> / <code>--rule 名称</code> 执行。</p>
+        <div class="checks">{{FORMAT_CHECKS}}</div>
+        <div class="btn-row">
+          <button class="btn btn-primary" type="submit" data-wait="正在生成规则 JSON…">生成规则 JSON</button>
+          <button class="btn btn-ghost" type="submit" formaction="/run" data-wait="正在生成规则并执行…">生成并立即执行</button>
+          <a class="btn btn-ghost" href="/jobs">后台任务</a>
+        </div>
+      </form>
+      {{ERRORS}}
+    </div>
+
+    <div class="card">
+      <h2>规则 JSON（可查看 / 可编辑）</h2>
+      <p class="hint">输出：经白名单校验的规则。可直接编辑后再执行；规则本身也可导出为文件。</p>
+      {{RULE_META}}
+      {{RULE_TASK}}
+      <form method="post" action="/execute"
+            data-stages="校验规则 JSON,读取数据源,执行清洗与算子管道,生成结果与报告">
+        <label class="field"><span>规则编辑器</span>
+          <textarea class="code" name="rule_json" rows="16" placeholder="点击「生成规则 JSON」后在此显示">{{RULE_JSON_RAW}}</textarea>
+        </label>
+        <label class="field"><span>保存为可复用规则（填写名称后点击「保存到规则库」）</span>
+          <input type="text" name="rule_name" value="{{RULE_NAME}}" placeholder="例如：福州2026年各小区条数统计">
+        </label>
+        <div class="btn-row">
+          <button class="btn btn-primary" type="submit" data-wait="正在校验并执行规则…">校验并执行规则</button>
+          <button class="btn btn-ghost" type="submit" formaction="/rules/save" data-no-wait="1">保存到规则库</button>
+          <a class="btn btn-ghost" href="/">清空</a>
+        </div>
+      </form>
+      {{RULE_PREVIEW}}
+      <details class="fold" open>
+        <summary>各环节输入与输出契约</summary>
+        <div>{{CONTRACT}}</div>
+      </details>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:18px">
+    <h2>规则库（保存 / 管理 / 直接执行）</h2>
+    <p class="hint">生成或编辑规则后填写名称即可保存；之后可在左侧下拉直接选用，或在此一键执行、载入编辑、删除。规则文件存于 <code>rules/</code>，CLI 用 <code>etl_pipeline.py rules list</code> 与 <code>nl --rule 名称</code> 复用同一批规则。</p>
+    {{RULES_LIBRARY}}
+  </div>
+
+  <div class="card" style="margin-top:18px">
+    <h2>最近执行记录</h2>
+    <p class="hint">输出：已落盘的运行产物，点击进入任务结果页。</p>
+    {{RUNS}}
+  </div>
+</div>
+
+{{FOOTER}}
+{{CONTROLS}}
+</body>
+</html>

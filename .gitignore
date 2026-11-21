@@ -1,0 +1,38 @@
+# 凭据与本机配置（严禁提交）
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 运行产物与临时文件
+output/
+output_*/
+*.log
+_verify_*.py
+_verify_*.txt
+_migrate.py
+_diag.py
+_repro*
+_tmp_*/
+
+# Web 上传的原始文件（可能含业务数据/敏感信息，不纳入版本控制）
+uploads/
+
+# 本地样例数据 / 浏览器验证产物 / 临时文档样本（体积大且含业务数据）
+lots.csv
+.playwright-cli/
+_doc_samples/
+
+# 注意：rules/ 是用户保存的规则库，属于有意保留的资产，请勿忽略。
+
+# 虚拟环境
+.venv/
+venv/

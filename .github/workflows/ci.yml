@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Syntax check
+        run: python -m compileall -q .
+
+      - name: Unit and integration tests
+        # 真实在线模型测试默认跳过（需 RUN_REAL_LLM_TESTS=1 + 密钥），
+        # 本作业验证的是离线可复现的编译/执行/生成门禁链路。
+        run: pytest -q
+
+      - name: Generation quality gate (optional, needs key)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          if [ -n "$LLM_API_KEY" ]; then
+            RUN_REAL_LLM_TESTS=1 pytest -q tests/test_prompt_engineering.py
+          else
+            echo "LLM_API_KEY 未配置，跳过真实模型门禁"
+          fi

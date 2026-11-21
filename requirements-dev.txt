@@ -1,0 +1,19 @@
+# ============================================================
+# DataClean 测试/开发依赖（离线可跑，无真实 LLM key 亦可）
+# ============================================================
+# 用途：为 tests/ 下的 pytest 用例提供测试运行器与覆盖率统计工具。
+#       pytest-cov 依赖 coverage，三者一并约束大版本上限，避免跨大版本升级
+#       导致插件与测试代码不兼容。
+#
+# 安装（建议在核心依赖之后安装）：
+#   pip install -r requirements-dev.txt
+#   或一次性安装全部（核心 + 测试）：
+#   pip install -r requirements.txt -r requirements-dev.txt
+#
+# 运行测试（覆盖率默认不开，避免拖慢；手动开启见 pytest.ini 注释）：
+#   pytest -q
+#   pytest -q --cov=ops --cov=rules --cov-report=term-missing
+
+pytest>=8,<10
+pytest-cov>=5,<7
+coverage>=7,<8

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DataClean · 文档结构化抽取</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="{{BODY_CLASS}}">
+{{NAV}}
+
+<div class="page-wrap">
+  <section class="hero">
+    <div class="kicker">Document → Structured Output</div>
+    <h1>文档结构化数据抽取</h1>
+    <p>从 PDF / DOCX / TXT 与图片扫描件中自动提取结构化字段与表格。支持一次选择多个文件批量处理、<b>同步 / 异步两种执行方式</b>、节能模式（语义定位 + 滑动窗口，只把相关片段交给 LLM）、以及横向宽表 CSV / Excel 导出。</p>
+    <img class="hero-art" alt="" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='240'%20height='120'%3E%3Cdefs%3E%3ClinearGradient%20id='g'%3E%3Cstop%20stop-color='%231E3A8A'/%3E%3Cstop%20offset='1'%20stop-color='%230EA5E9'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect%20width='240'%20height='120'%20rx='18'%20fill='url(%23g)'/%3E%3Ctext%20x='120'%20y='68'%20text-anchor='middle'%20font-family='Arial'%20font-size='19'%20fill='white'%3EOCR%20Extract%3C/text%3E%3C/svg%3E"
+         onerror="this.style.display='none'">
+  </section>
+
+  <div class="steps">
+    <div class="step active"><div class="num">1</div><div><div class="st">文档输入</div><div class="sd">{{SUPPORTED}}</div></div></div>
+    <div class="step {{STEP2}}"><div class="num">2</div><div><div class="st">解析与抽取</div><div class="sd">统一中间结构 → LLM</div></div></div>
+    <div class="step {{STEP3}}"><div class="num">3</div><div><div class="st">结构化输出</div><div class="sd">字段 + 表格 + 证据</div></div></div>
+    <div class="step {{STEP4}}"><div class="num">4</div><div><div class="st">导出 / 联动</div><div class="sd">JSON / CSV / 送入清洗</div></div></div>
+  </div>
+
+  <div class="grid two">
+    <div class="card">
+      <h2>文档输入</h2>
+      <p class="hint">三种选文件方式可叠加：<b>上传（可多选批量）</b>、<b>从服务器已有文件中选择</b>、或直接填路径。支持 PDF / DOCX / TXT / MD / CSV / PNG / JPG / WEBP 等。</p>
+      <form method="post" action="/extract" enctype="multipart/form-data"
+            data-stages="保存上传文件,解析文档与语义定位字段,调用 LLM 结构化抽取,导出 JSON / CSV / Excel">
+        <label class="field"><span>选择文档文件（可按住 Ctrl / Shift 多选，一次批量处理）</span>
+          <input type="file" name="doc_files" multiple accept=".txt,.md,.csv,.json,.log,.tsv,.pdf,.docx,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff">
+        </label>
+        <label class="field"><span>或从服务器已有文件中选择</span>
+          <select name="local_doc">{{LOCAL_DOC_OPTIONS}}</select>
+        </label>
+        <label class="field"><span>或直接填写文档路径</span>
+          <input type="text" name="doc_path" value="{{DOC_PATH}}" placeholder="_doc_samples/contract.txt">
+        </label>
+        <div class="chips">{{DOC_SAMPLES}}</div>
+        <label class="field"><span>字段定义 Schema（每行：<code>*名称:类型</code>，可选第三段写定位别名 <code>:别名1|别名2</code>）</span>
+          <textarea class="code" name="schema_text" rows="7" placeholder="*合同编号:string:合同编号|编号&#10;主体名称:string:主体名称|甲方&#10;日期:date:日期|签订日期&#10;金额:number:金额|总价|价款">{{SCHEMA_TEXT}}</textarea>
+        </label>
+        <p class="hint">第三段是节能模式的「语义定位关键词」；留空时系统按字段名与内置概念词典自动扩展。</p>
+
+        <details class="fold" {{ECO_OPEN}}>
+          <summary>节能模式（语义定位 + 滑动窗口，显著降低 token）</summary>
+          <div>
+            <label class="checks"><label><input type="checkbox" name="eco" value="1" {{ECO_CHECKED}}> 启用节能模式</label></label>
+            <p class="hint">先按字段语义在原文中定位（本地完成，不调用 LLM），再取命中位置前后 N 字符的窗口片段、合并重叠后交给 LLM；若完全定位不到则自动回退全文。</p>
+            <div class="row">
+              <label class="field"><span>窗口字符数 N（前后各取）</span><input type="number" name="eco_window" min="20" max="2000" value="{{ECO_WINDOW}}"></label>
+              <label class="field"><span>最多片段数</span><input type="number" name="eco_max_snippets" min="1" max="200" value="{{ECO_MAX_SNIPPETS}}"></label>
+            </div>
+            <div class="row">
+              <label class="field"><span>送入字符上限</span><input type="number" name="eco_max_chars" min="200" max="30000" value="{{ECO_MAX_CHARS}}"></label>
+              <label class="field"><span>批量并发数</span><input type="number" name="workers" min="1" max="8" value="{{WORKERS}}"></label>
+            </div>
+          </div>
+        </details>
+
+        <label class="field"><span>结构化导出格式（字段名为第一行，横向宽表）</span>
+          <div class="checks">{{EXPORT_CHECKS}}</div>
+        </label>
+        <label class="field"><span>处理方式</span>
+          <div class="checks mode-checks">
+            <label><input type="radio" name="mode" value="sync" {{MODE_SYNC_CHECKED}}> <b>同步</b>：页面等待执行完成，直接展示结果</label>
+            <label><input type="radio" name="mode" value="async" {{MODE_ASYNC_CHECKED}}> <b>异步</b>：后台执行，实时进度页，可离开页面稍后回来取结果</label>
+          </div>
+        </label>
+        <p class="hint">多份文档或大文件建议选异步：提交后立即返回任务号，页面每 2 秒自动刷新；单份失败不会中断整批，结果可从「后台任务」列表随时找回。</p>
+        <div class="btn-row">
+          <button class="btn btn-primary" type="submit" data-wait="正在执行结构化抽取…">执行结构化抽取</button>
+          <a class="btn btn-ghost" href="/jobs">查看后台任务</a>
+        </div>
+      </form>
+      {{ERRORS}}
+    </div>
+
+    <div class="card">
+      <h2>抽取结果</h2>
+      <p class="hint">输出：fields 键值对、tables 二维数组、confidence 置信度与 evidence 原文片段；批量时展示每份文档的处理结果与汇总宽表。</p>
+      {{META}}
+      {{ECO_SUMMARY}}
+      {{BATCH_SUMMARY}}
+      {{RESULT_FIELDS}}
+      {{RESULT_TABLES}}
+      {{EVIDENCE}}
+      {{RESULT_JSON}}
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:18px">
+    <h2>导出与联动</h2>
+    <p class="hint">输出：结构化 JSON / CSV / Excel。字段名为第一行、每份文档一行；抽取出的表格可直接送入清洗管道继续处理。</p>
+    <div class="artifacts">{{ARTIFACTS}}</div>
+    {{PIPELINE_LINK}}
+  </div>
+
+  <div class="contract">
+    <h3>环节契约 · 文档抽取 → 结构化输出</h3>
+    {{CONTRACT}}
+  </div>
+</div>
+
+{{FOOTER}}
+{{CONTROLS}}
+</body>
+</html>
