@@ -105,6 +105,8 @@
           <textarea class="code" name="rule_json" rows="3" placeholder='留空则由 LLM 生成；填入 {"version":"2.0", ...} 时直接采用该规则'>{{RULE_INPUT_JSON}}</textarea>
         </label>
         <p class="hint">未配置 LLM_API_KEY 时，请在此粘贴规则 JSON，或在上方选择已保存规则；也可用命令行 <code>--rule-file</code> / <code>--rule 名称</code> 执行。</p>
+        <label class="check"><input type="checkbox" name="schema_mode" value="1" {{SCHEMA_MODE_CHECKED}}> 使用结构化意图 Schema（v1.0）</label>
+        <p class="hint">勾选后由 LLM 把描述解析为受约束的意图 JSON，再由确定性编译器生成规则；适合组合、跨年趋势、比值型均价等复杂描述。</p>
         <div class="checks">{{FORMAT_CHECKS}}</div>
         <div class="btn-row">
           <button class="btn btn-primary" type="submit" data-wait="正在生成规则 JSON…">生成规则 JSON</button>

@@ -46,6 +46,8 @@ from ops.compiler import reconcile_rule_columns as _reconcile_columns
 from ops.compiler import validate_steps as _validate_steps
 from ops.constants import TASK_TYPES
 from ops.intent import apply_intent_plan
+from ops.intent_schema import compile_schema as compile_intent_schema
+from ops.intent_schema import parse_intent_schema
 from ops.prompt import build_catalog
 from ops.prompt_repair import repair_date_steps
 from ops.prompt_kit import (
@@ -1059,6 +1061,85 @@ def validate_source_path(
         if root not in path.parents and path != root:
             raise RuleValidationError([f"数据源超出允许目录：{path}"])
     return path
+
+
+# ------------------------------------------------------------
+# 结构化意图 Schema 路径（v1.0，真实 LLM 调用，不依赖中文正则）
+# ------------------------------------------------------------
+def generate_rules_from_schema(
+    intent: str,
+    source: Dict[str, Any],
+    columns: Optional[List[str]] = None,
+    provider: Optional[LLMProvider] = None,
+    sources: Optional[Dict[str, Any]] = None,
+    source_columns: Optional[Dict[str, List[str]]] = None,
+    column_aliases: Any = None,
+    max_attempts: int = 2,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """描述 → 真实 LLM 解析结构化意图 → 确定性编译 → 规则校验。
+
+    与 ``generate_rules`` 的区别：意图理解由 LLM 填 Schema 完成，规则步骤不再
+    由模型直接输出，也不再经过中文正则 ``apply_intent_plan``。Schema 解析失败
+    时抛出 ``LLMError``（不静默降级到关键词猜测），调用方可回退到旧链路。
+    """
+    if not columns:
+        try:
+            columns = probe_columns(source)
+        except Exception:  # noqa: BLE001
+            columns = []
+    columns = [str(c) for c in columns]
+    p = provider or get_provider()
+    info = describe_provider(p)
+    alias_map, alias_warnings = parse_column_aliases(column_aliases, columns)
+    schema, schema_meta = parse_intent_schema(
+        intent, p, columns, alias_map, sources, source_columns, max_attempts=max_attempts
+    )
+    if schema is None:
+        raise LLMError(
+            "结构化意图解析失败：" + "；".join(schema_meta.get("errors", [])[:5]),
+            "parse",
+        )
+    compiled = compile_intent_schema(schema)
+    # 只校验步骤契约：完整 rule 尚未组装，validate_rule 会误报 source/version 缺失
+    errors = _validate_steps(compiled.steps, columns)
+    if errors:
+        raise RuleValidationError(errors)
+    rule: Dict[str, Any] = {
+        "version": RULE_VERSION,
+        "intent": intent,
+        "source": dict(source),
+        "options": {"fill_missing": "none", "outlier_method": "none"},
+        "task_type": compiled.task_type,
+        "steps": compiled.steps,
+        "output": {"formats": list(DEFAULT_OUTPUT["formats"]), "report": True},
+    }
+    if sources:
+        cleaned = {str(k): dict(v) for k, v in sources.items() if isinstance(v, dict)}
+        cleaned.setdefault("main", dict(source))
+        rule["sources"] = cleaned
+    issues = evaluate_rule(rule, intent, columns, alias_map)
+    meta: Dict[str, Any] = {
+        "provider": info.name,
+        "mode": info.mode,
+        "model": info.model,
+        "reason": info.reason,
+        "degraded": False,
+        "generation_path": "intent_schema",
+        "intent_schema": schema_meta,
+        "schema": schema.to_dict(),
+        "compile_notes": compiled.notes,
+        "semantic_issues": format_issues(issues),
+        "llm_attempts": int(schema_meta.get("attempts", 0)),
+        "elapsed": float(schema_meta.get("elapsed", 0.0)),
+    }
+    if alias_map:
+        meta["column_aliases"] = dict(alias_map)
+        rule["column_aliases"] = dict(alias_map)
+    if alias_warnings:
+        meta["alias_warnings"] = alias_warnings
+    LOGGER.info("结构化意图生成：%d 步，语义问题 %d，模型调用 %d 次",
+                len(compiled.steps), len(issues), meta["llm_attempts"])
+    return rule, meta
 
 
 # ------------------------------------------------------------

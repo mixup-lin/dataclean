@@ -638,6 +638,7 @@ def _workbench(
     rule_input_json: str = "",
     rule_name: str = "",
     saved_rule_id: str = "",
+    schema_mode: bool = False,
 ) -> Reply:
     v = _view_params(query)
     err_html = ""
@@ -710,6 +711,7 @@ def _workbench(
         RULE_INPUT_JSON=_esc(rule_input_json),
         COLUMN_HINTS=_column_hints_html(hinted),
         FORMAT_CHECKS=_format_checks(formats or []),
+        SCHEMA_MODE_CHECKED="checked" if schema_mode else "",
         ERRORS=err_html, RULE_META=meta_html, RULE_TASK=_rule_task_badge(rule),
         RULE_JSON_RAW=_esc(rule_raw), RULE_PREVIEW=rule_preview,
         CONTRACT=CONTRACT_RULES, RUNS=_runs_html(base_output),
@@ -1624,6 +1626,7 @@ def handle_request(
         rule_input = _form_value(form, "rule_json").strip()
         saved_rule_id = _form_value(form, "saved_rule_id").strip()
         rule_name = _form_value(form, "rule_name").strip()
+        schema_mode = _form_value(form, "schema_mode").strip() == "1"
         formats = _form_list(form, "formats") or ["csv"]
         wants_report = "1" in _form_list(form, "report")
         if not intent:
@@ -1634,7 +1637,10 @@ def handle_request(
             )
         sources: Dict[str, Any] = {}
         try:
-            from rules import generate_rules, parse_column_aliases, probe_columns, validate_rule
+            from rules import (
+                generate_rules, generate_rules_from_schema,
+                parse_column_aliases, probe_columns, validate_rule,
+            )
 
             sources = _collect_sources(form, files)
             source = sources["main"]
@@ -1686,6 +1692,14 @@ def handle_request(
                 }
                 if alias_map:
                     rule["column_aliases"] = dict(alias_map)
+            elif schema_mode:
+                # 结构化意图 Schema：真实 LLM 解析 → 确定性编译，不经中文正则兜底
+                rule, meta = generate_rules_from_schema(
+                    intent, source, cols,
+                    sources=sources if multi else None,
+                    source_columns=source_columns,
+                    column_aliases=alias_text,
+                )
             else:
                 rule, meta = generate_rules(
                     intent, source, cols,
@@ -1705,8 +1719,9 @@ def handle_request(
                     columns=columns, formats=formats, errors=errs,
                     sources=sources, column_aliases=alias_text,
                     rule_input_json=rule_input,
-                    saved_rule_id=saved_rule_id, rule_name=rule_name,
-                )
+                saved_rule_id=saved_rule_id, rule_name=rule_name,
+                schema_mode=schema_mode,
+            )
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("Web 规则生成失败: %s", type(exc).__name__)
             return _workbench(
@@ -1715,6 +1730,7 @@ def handle_request(
                 columns=columns, formats=formats, errors=[str(exc)],
                 sources=sources, column_aliases=alias_text,
                 rule_input_json=rule_input,
+                schema_mode=schema_mode,
             )
         if path == "/plan":
             return _workbench(
@@ -1724,6 +1740,7 @@ def handle_request(
                 sources=sources, column_aliases=alias_text,
                 rule_input_json=rule_input,
                 saved_rule_id=saved_rule_id, rule_name=rule_name,
+                schema_mode=schema_mode,
             )
         try:
             from rule_executor import execute_rule
