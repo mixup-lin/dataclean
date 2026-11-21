@@ -81,9 +81,13 @@ def apply_count_rows(
     df: pd.DataFrame, step: Dict[str, Any], frames=None, ctx=None
 ) -> Tuple[pd.DataFrame, str]:
     bys = existing_cols(df, step.get("by"))
-    if not bys:
-        raise RuleValidationError(["count_rows 分组列不存在"])
     alias = str(step.get("alias") or "条数").strip() or "条数"
+    if not bys:
+        # by=[] 表示整体计数：不依赖任何业务列是否为空，直接产出单行总数。
+        return (
+            pd.DataFrame([{alias: len(df)}]),
+            f"统计全部行数 → {alias}（{len(df)} 行）",
+        )
     grouped = df.groupby(bys, dropna=False).size().reset_index(name=alias)
     if step.get("sort", True):
         grouped = grouped.sort_values(alias, ascending=False, kind="mergesort")
@@ -99,9 +103,12 @@ def _count_rows_refs(step: Dict[str, Any]) -> List[str]:
 
 
 def _validate_count_rows(step, known, tag, errors) -> None:
-    bys = as_list(step.get("by"))
-    if not bys or not all(isinstance(x, str) and x for x in bys):
+    raw_by = step.get("by")
+    if raw_by is not None and not isinstance(raw_by, (str, list)):
         errors.append(f"{tag}.by 必须是字符串或字符串数组")
+    bys = as_list(raw_by)
+    if not all(isinstance(x, str) and x for x in bys):
+        errors.append(f"{tag}.by 的每一项必须是非空列名；整体计数用空数组")
     for col in bys:
         if isinstance(col, str) and known and col not in known:
             errors.append(f"{tag}.by 引用了不存在的列 {col!r}")

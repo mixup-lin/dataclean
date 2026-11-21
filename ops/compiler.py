@@ -17,7 +17,30 @@ from ops import contract
 from ops.constants import DATE_PART_LABELS, as_list
 from ops.errors import RuleValidationError
 from ops.intent import judgement_columns, parse_rate_intent, target_from_intent
+from ops.intent_schema import rate_spec_from_schema, target_from_schema
 from ops.registry import get_op, op_names
+
+
+# ------------------------------------------------------------
+# 意图读取迁移：有 Schema 时只读结构化字段，旧规则仍走文本解析兜底
+# ------------------------------------------------------------
+def _rule_schema(rule: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    payload = rule.get("intent_schema")
+    return payload if isinstance(payload, dict) else None
+
+
+def _rate_target(rule: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    schema = _rule_schema(rule)
+    if schema is not None:
+        return target_from_schema(schema)
+    return target_from_intent(rule.get("intent"))
+
+
+def _rate_spec(rule: Dict[str, Any], columns: List[str]):
+    schema = _rule_schema(rule)
+    if schema is not None:
+        return rate_spec_from_schema(schema, columns, rule.get("column_aliases"))
+    return parse_rate_intent(rule.get("intent"), columns, rule.get("column_aliases"))
 
 
 # ------------------------------------------------------------
@@ -363,7 +386,7 @@ def _fix_rate_direction_only(
     - 明显错误链路（矛盾判空 filter / 判空筛选但完全没有结果算子）：
       用规则自身出现过的判据列补一个 rate，避免产出 0 行或只有明细。
     """
-    target = target_from_intent(rule.get("intent"))
+    target = _rate_target(rule)
     if target is None:
         return steps
     work = list(steps)
@@ -460,7 +483,7 @@ def _apply_rate_intent(
     且仅在检测到明显缺口时动手：缺结果算子、方向与目标不符、pct 应升级为 rate。
     骨架本身已是正确形态时保持不动，保证幂等。
     """
-    spec = parse_rate_intent(rule.get("intent"), columns, rule.get("column_aliases"))
+    spec = _rate_spec(rule, columns)
     if spec is None:
         return _fix_rate_direction_only(
             steps, rule, warnings, original if original is not None else steps

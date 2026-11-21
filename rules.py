@@ -1111,6 +1111,8 @@ def generate_rules_from_schema(
         "options": {"fill_missing": "none", "outlier_method": "none"},
         "task_type": compiled.task_type,
         "steps": compiled.steps,
+        # 编译层据此从 Schema 字段读取意图，避免对已结构化的规则再做中文正则推断。
+        "intent_schema": schema.to_dict(),
         "output": {"formats": list(DEFAULT_OUTPUT["formats"]), "report": True},
     }
     if sources:

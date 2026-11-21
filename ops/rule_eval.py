@@ -289,13 +289,19 @@ def evaluate_rule(rule: Any, intent: str, columns: Sequence[str],
 
     # ---------- 跨场景语义：时间桶、均价口径、原语顺序 ----------
     date_part_steps = [s for s in steps if s.get("op") == "date_part"]
+    date_filter_steps = [s for s in steps if s.get("op") == "date_filter"]
+    # 单一具体年份筛选后，同期月份不会跨年合并，无需再强制 date_part 带 year；
+    # 但年份区间、未限定年份的按月/按季度趋势仍必须用 year+细粒度组合桶。
+    exact_year_filter = any(str(s.get("year") or "").strip().isdigit()
+                            for s in date_filter_steps)
     for dp in date_part_steps:
         parts = [str(p) for p in (dp.get("parts") or [])]
         fine = [p for p in parts if p in ("quarter", "month", "week", "day")]
-        if fine and "year" not in parts:
+        if fine and "year" not in parts and not exact_year_filter:
             issues.append(Issue(
                 "cross_year_bucket",
-                f"date_part 只有 {fine} 没有 year，跨年同季会被合并；应加 year 并用 bucket 组合时间桶",
+                f"date_part 只有 {fine} 没有 year，且未用 date_filter 锁定单一年份；"
+                "跨年同期会被合并，应加 year 并用 bucket 组合时间桶",
             ))
     if (date_part_steps and re.search(r"每一?年|逐年|按年.*按季度|按季度.*按年", text)
             and not any("year" in [str(p) for p in (s.get("parts") or [])]
@@ -369,7 +375,15 @@ def evaluate_rule(rule: Any, intent: str, columns: Sequence[str],
         # 组合场景不绑定固定链路：只要求动作覆盖完整、存在分析算子、task_type 一致。
         if len(ops) < 2:
             issues.append(Issue("composite_too_few_ops", "组合需求必须编排至少两个原语"))
-        if not ({"aggregate", "count_rows", "resample", "pct", "rank", "pivot"} & set(ops)):
+        # 组合清洗/筛选的终点仍是明细，不应强制追加分析算子；但若描述明确要求
+        # 分析/统计/趋势等结果，则无论 LLM 把 task_type 写成 detail 都要补齐分析算子。
+        needs_analysis = bool(re.search(
+            r"分析|统计|汇总|趋势|排名|占比|比例|率|条数|数量|每个|分组|透视|相关|均值|平均|总和|总计",
+            text,
+        ))
+        if (needs_analysis
+                and not ({"aggregate", "count_rows", "resample", "pct", "rank", "pivot"}
+                         & set(ops))):
             issues.append(Issue("composite_no_analysis", "组合流程末尾缺少分析步骤，结果不再是分析产物"))
         if re.search(r"去重", text) and "dedupe" not in ops:
             issues.append(Issue("composite_stage_missing", "需求明确要求去重，但步骤里没有 dedupe"))
@@ -399,6 +413,16 @@ def evaluate_rule(rule: Any, intent: str, columns: Sequence[str],
             alias = str(rate.get("alias", ""))
             expected = _expected_rate_direction(text, alias)
             if expected:
+                # 命中类由 condition 决定：condition=isna 时「不成交」也可能是命中类。
+                # 只要目标名与 true_label/false_label 明确一致，就以标签为准判断方向，
+                # 避免把「空值=未成交，统计未成交率（hit/isna）」误判成 miss。
+                target_label = re.sub(r"(率|占比|比例|百分比)$", "", alias).strip()
+                true_label = str(rate.get("true_label") or "").strip()
+                false_label = str(rate.get("false_label") or "").strip()
+                if target_label and target_label == true_label:
+                    expected = ("hit", expected[1])
+                elif target_label and target_label == false_label:
+                    expected = ("miss", expected[1])
                 actual = (str(rate.get("numerator", "hit")), str(rate.get("denominator", "total")))
                 if actual != expected:
                     issues.append(Issue(

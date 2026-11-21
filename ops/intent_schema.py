@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
@@ -31,7 +32,7 @@ from ops.constants import (
     OUTLIER_ACTIONS,
     OUTLIER_METHODS,
 )
-from ops.intent import resolve_column
+from ops.intent import RateIntent, resolve_column
 
 SCHEMA_VERSION = "1.0"
 TASK_TYPES = ("detail", "summary", "proportion", "trend", "count_group", "pivot")
@@ -96,16 +97,18 @@ OP_SPEC: Dict[str, Dict[str, Any]] = {
         "required": ["by", "metrics"],
     },
     "count": {
-        "desc": "按列计数行数",
-        "fields": {"by": "分组列名数组", "alias": "结果列名", "sort": "是否按计数降序排列"},
-        "required": ["by"],
+        "desc": "按列计数行数；整体计数用 by=[]",
+        "fields": {"by": "分组列名数组；整体计数填空数组", "alias": "结果列名",
+                   "sort": "是否按计数降序排列"},
+        "required": [],
     },
     "rate": {
         "desc": "二分类占比算子；判据列的空/非空即两类",
         "fields": {"column": "判据列", "condition": "{column, operator: isna|notna}",
-                   "true_label": "命中类名称", "false_label": "另一类名称",
-                   "alias": "结果列名", "numerator": "hit|miss", "denominator": "total|hit|miss",
-                   "by": "分组列名数组"},
+                   "true_label": "满足 condition 的那一类", "false_label": "另一类名称",
+                   "target_label": "目标率对应的类别；通常可由 alias 去掉「率」得到",
+                   "alias": "结果列名", "numerator": "hit|miss（hit 取 true_label）",
+                   "denominator": "total|hit|miss", "by": "分组列名数组"},
         "required": ["column"],
     },
     "sort": {
@@ -203,6 +206,26 @@ def validate_schema(
     task_type = str(payload.get("task_type", "")).strip()
     if task_type not in TASK_TYPES:
         errors.append(f"task_type 必须是 {list(TASK_TYPES)} 之一，实际是 {task_type!r}")
+
+    assumptions = payload.get("assumptions", [])
+    if assumptions is not None and not isinstance(assumptions, list):
+        errors.append("assumptions 必须是字符串数组")
+        assumptions = []
+    for item in assumptions or []:
+        if not isinstance(item, str):
+            errors.append("assumptions 的每一项必须是字符串")
+        elif re.search(r"不存在|未找到|臆测|猜测", item):
+            # 模型自己承认在假设不存在的列，说明它没有按真实列清单填表；
+            # 这类假设不能被当作合法口径，否则会把「不存在的字段」悄悄换成真实列。
+            errors.append(f"assumptions 不允许用不存在的字段做假设：{item[:80]}")
+
+    unresolved = payload.get("unresolved_columns", [])
+    if unresolved is not None and not isinstance(unresolved, list):
+        errors.append("unresolved_columns 必须是字符串数组")
+        unresolved = []
+    unresolved = [str(x).strip() for x in unresolved or [] if str(x).strip()]
+    if unresolved:
+        errors.append("需求包含无法映射到真实列的字段，已拒绝猜测：" + "、".join(unresolved[:5]))
 
     operations = payload.get("operations")
     if not isinstance(operations, list) or not operations:
@@ -371,6 +394,8 @@ def validate_schema(
             op["metrics"] = cleaned_metrics
 
         elif kind == "count":
+            if "by" not in raw or not isinstance(raw["by"], list):
+                errors.append(f"{tag}.by 必须是数组；整体计数用空数组")
             by = _as_list(raw.get("by"))
             op["by"] = [_resolve(b, columns, aliases, known, errors,
                                  f"{tag}.by", derived) for b in by]
@@ -391,7 +416,8 @@ def validate_schema(
                 op["condition"] = {"column": op["column"], "operator": operator}
             else:
                 errors.append(f"{tag}.condition 必须是对象")
-            for key in ("true_label", "false_label", "alias", "numerator", "denominator"):
+            for key in ("true_label", "false_label", "target_label", "alias",
+                        "numerator", "denominator"):
                 if key in raw:
                     op[key] = raw[key]
             if str(op.get("numerator", "hit")) not in ("hit", "miss"):
@@ -428,13 +454,22 @@ def validate_schema(
             errors.append(f"task_type={task_type!r} 但 operations 没有聚合/计数/比率算子")
         if task_type == "proportion" and "rate" not in kinds:
             errors.append("task_type=proportion 时必须有 rate 算子")
-        if task_type == "count_group" and "count" not in kinds:
-            errors.append("task_type=count_group 时必须有 count 算子")
+        if (task_type == "count_group" and "count" not in kinds
+                and "aggregate" not in kinds):
+            errors.append("task_type=count_group 时必须有 count 或 aggregate 算子")
         if task_type == "detail" and analysis:
             notes.append("task_type=detail 但含分析算子，编译时以算子为准改为 summary")
 
+    # 模型偶尔把「分组求和/求均值」标成 count_group；按算子结构归一为 summary，
+    # 不因为一个非关键标签让合法规则整体解析失败。
+    final_task_type = task_type
+    kinds = [op.get("kind") for op in normalized if isinstance(op, dict)]
+    if task_type == "count_group" and "aggregate" in kinds and "count" not in kinds:
+        final_task_type = "summary"
+        notes.append("task_type 按算子结构由 count_group 归一为 summary（分组聚合而非纯计数）")
+
     return SchemaResult(
-        payload={**payload, "operations": normalized},
+        payload={**payload, "task_type": final_task_type, "operations": normalized},
         columns=[str(c) for c in columns],
         errors=errors,
         notes=notes,
@@ -626,6 +661,101 @@ def compile_schema(result: SchemaResult) -> CompileResult:
 
 
 # ------------------------------------------------------------
+# 编译层迁移适配：从 Schema 字段读取比率意图，不再解析中文文本
+# ------------------------------------------------------------
+_RATE_SUFFIX_RE = re.compile(r"(率|占比|比例|百分比)$")
+
+
+def _schema_payload(value: Any) -> Optional[Dict[str, Any]]:
+    """接受 SchemaResult / dict，返回可读取的 Schema 字典。"""
+    if isinstance(value, SchemaResult):
+        return value.payload if value.ok else None
+    return value if isinstance(value, dict) else None
+
+
+def _rate_operations(payload: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    data = _schema_payload(payload)
+    if not data:
+        return []
+    if str(data.get("kind")) == "rate":
+        return [data]
+    return [op for op in (data.get("operations") or [])
+            if isinstance(op, dict) and str(op.get("kind")) == "rate"]
+
+
+def target_from_schema(payload: Any) -> Optional[Dict[str, str]]:
+    """给编译层用：从 Schema 的 rate 字段读取目标率，不读取中文 intent。"""
+    ops = _rate_operations(payload)
+    if not ops:
+        return None
+    op = ops[0]
+    alias = str(op.get("alias") or "").strip()
+    true_label = str(op.get("true_label") or "").strip()
+    target_label = str(op.get("target_label") or "").strip()
+    if not target_label:
+        target_label = _RATE_SUFFIX_RE.sub("", alias).strip()
+    if not target_label:
+        target_label = true_label
+    if not alias:
+        alias = f"{target_label}率" if target_label else "比率"
+    if not target_label:
+        return None
+    return {"alias": alias, "target_label": target_label}
+
+
+def rate_spec_from_schema(
+    payload: Any,
+    columns: Optional[Sequence[str]] = None,
+    aliases: Optional[Dict[str, str]] = None,
+) -> Optional[RateIntent]:
+    """把已校验 Schema 的 rate 操作转换为编译层 ``RateIntent``。
+
+    这是 ``ops.intent.parse_rate_intent`` 的结构化替代：只读 operations 字段，
+    不解析自然语言。旧规则没有 ``intent_schema`` 时仍走旧解析器。
+    """
+    ops = _rate_operations(payload)
+    if not ops:
+        return None
+    op = ops[0]
+    judge_column = str(op.get("column") or "").strip()
+    if not judge_column:
+        return None
+    if columns:
+        resolved = resolve_column(judge_column, columns, aliases)
+        if not resolved:
+            return None
+        judge_column = resolved
+    condition = op.get("condition") if isinstance(op.get("condition"), dict) else {}
+    operator = str(condition.get("operator") or "notna")
+    if operator not in ("isna", "notna"):
+        operator = "notna"
+    true_label = str(op.get("true_label") or "命中").strip() or "命中"
+    false_label = str(op.get("false_label") or "未命中").strip() or "未命中"
+    if false_label == true_label:
+        false_label = f"非{true_label}"
+    target = target_from_schema(op) or {"alias": f"{true_label}率", "target_label": true_label}
+    numerator = str(op.get("numerator") or "").strip()
+    if numerator not in ("hit", "miss"):
+        numerator = "hit" if target["target_label"] == true_label else "miss"
+    denominator = str(op.get("denominator") or "total").strip()
+    if denominator not in ("total", "hit", "miss"):
+        denominator = "total"
+    by = [str(c) for c in (op.get("by") or []) if str(c).strip()]
+    return RateIntent(
+        judge_column=judge_column,
+        condition={"column": judge_column, "operator": operator},
+        true_label=true_label,
+        false_label=false_label,
+        target_label=target["target_label"],
+        alias=target["alias"],
+        numerator=numerator,
+        denominator=denominator,
+        by=by,
+        notes=["比率意图来自 Schema 字段 rate.*，未解析中文描述"],
+    )
+
+
+# ------------------------------------------------------------
 # 提示词
 # ------------------------------------------------------------
 def build_schema_payload(
@@ -661,6 +791,67 @@ _FEWSHOTS = [
                  "condition": {"column": "成交价(元)", "operator": "notna"},
                  "true_label": "成交", "false_label": "未成交",
                  "alias": "成交率", "numerator": "hit", "denominator": "total"},
+            ],
+            "assumptions": [],
+        },
+    },
+    {
+        "intent": "提取市为福州的数据，成交价空值置为0，其他字段保持为空",
+        "output": {
+            "version": SCHEMA_VERSION, "task_type": "detail",
+            "operations": [
+                {"kind": "filter", "logic": "and",
+                 "conditions": [{"column": "市", "operator": "eq", "value": "福州"}]},
+                {"kind": "fill", "columns": ["成交价(元)"], "method": "zero"},
+            ],
+            "assumptions": [],
+        },
+    },
+    {
+        "intent": "统计未成交率：成交价为空算未成交，不为空算成交",
+        "output": {
+            "version": SCHEMA_VERSION, "task_type": "proportion",
+            "operations": [
+                {"kind": "rate", "column": "成交价(元)",
+                 "condition": {"column": "成交价(元)", "operator": "isna"},
+                 "true_label": "未成交", "false_label": "成交",
+                 "alias": "未成交率", "numerator": "hit", "denominator": "total"},
+            ],
+            "assumptions": [],
+        },
+    },
+    {
+        "intent": "统计不存在的字段的为空率",
+        "output": {
+            "version": SCHEMA_VERSION, "task_type": "detail",
+            "operations": [
+                {"kind": "select", "columns": ["标的号"]},
+            ],
+            "unresolved_columns": ["不存在的字段"],
+            "assumptions": [],
+        },
+    },
+    {
+        "intent": "按市分组统计成交率，成交价不为空算成交，为空算未成交",
+        "output": {
+            "version": SCHEMA_VERSION, "task_type": "proportion",
+            "operations": [
+                {"kind": "rate", "column": "成交价(元)", "by": ["市"],
+                 "condition": {"column": "成交价(元)", "operator": "notna"},
+                 "true_label": "成交", "false_label": "未成交",
+                 "alias": "成交率", "numerator": "hit", "denominator": "total"},
+            ],
+            "assumptions": [],
+        },
+    },
+    {
+        "intent": "统计2026-01-01到2026-06-30之间的数据条数",
+        "output": {
+            "version": SCHEMA_VERSION, "task_type": "count_group",
+            "operations": [
+                {"kind": "date_filter", "column": "结束时间",
+                 "start": "2026-01-01", "end": "2026-06-30"},
+                {"kind": "count", "by": [], "alias": "条数"},
             ],
             "assumptions": [],
         },
@@ -721,6 +912,7 @@ def build_schema_system() -> str:
         "最重要：operations 必须覆盖描述中提到的**每一个动作**，一个都不能少、不能停在中途。",
         f"输出格式：{{\"version\":\"{SCHEMA_VERSION}\",\"task_type\":\"...\",",
         "\"operations\":[{\"kind\":\"...\", 该 kind 的字段...}],",
+        "\"unresolved_columns\":[\"无法映射到真实列的字段\"],",
         "\"assumptions\":[\"对歧义口径的说明\"]}",
         f"task_type 枚举：{', '.join(TASK_TYPES)}。",
         f"筛选 operator 枚举：{', '.join(FILTER_OPERATORS)}。",
@@ -731,7 +923,8 @@ def build_schema_system() -> str:
         *spec_lines,
         "",
         "硬约束（违反任何一条即为错误输出）：",
-        "1. 所有 column/keys/by/operands 必须是输入 columns 中的真实列名或前置步骤派生列名，禁止臆造。",
+        "1. 所有 column/keys/by/operands 必须是输入 columns 中的真实列名或前置步骤派生列名，禁止臆造；"
+        "输入 columns 为英文时不得照抄示例里的中文列名。",
         "2. 具体年份、日期区间、近 N 天 → date_filter；按月/按季度只表示分桶粒度，不算筛选。",
         "3. 跨年按季度/按月趋势 → date_part.parts 必须同时含 year 和 quarter/month，并给 bucket（如 年季度、年月）。",
         "4. 「平均单价 = 金额/面积」这类显式比值指标 → aggregate.metrics 中用 "
@@ -743,7 +936,11 @@ def build_schema_system() -> str:
         "7. 明细提取 → task_type=detail，不要凭空添加 aggregate/count。",
         "8. 提到「条数/数量/每个X几条」→ 必须有 count 算子，不能只做 date_part。",
         "9. 描述里没有的口径不要补；确实需要解释的写在 assumptions 里。",
-        "10. 只输出一个合法 JSON 对象，键和字符串值用双引号，不能有注释、尾逗号或代码围栏。",
+        "10. 如果描述引用 columns 中不存在的列，不得猜测替代列，也不要在 assumptions 写「不存在/未找到」假设。",
+        "11. true_label 必须是满足 condition 的那一类；numerator=hit 取 true_label，"
+        "numerator=miss 取 false_label。例如 condition=isna、true_label=未成交、"
+        "目标未成交率时 numerator 必须是 hit。",
+        "12. 只输出一个合法 JSON 对象，键和字符串值用双引号，不能有注释、尾逗号或代码围栏。",
         "",
         "完整示例（严格照此结构与完整度输出）：",
         *fewshot_lines,
@@ -807,4 +1004,5 @@ __all__ = [
     "SCHEMA_VERSION", "TASK_TYPES", "OP_SPEC", "SchemaResult", "CompileResult",
     "build_schema_payload", "build_schema_system", "compile_schema",
     "parse_intent_schema", "validate_schema",
+    "rate_spec_from_schema", "target_from_schema",
 ]
