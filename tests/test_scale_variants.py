@@ -115,6 +115,7 @@ def _run_chain(
         "columns": [",".join(columns)],
         "formats": ["csv"],
         "report": ["1"],
+        "generation_path": ["legacy"],
     }, state)
     assert plan.status == 200, plan.body[:1200]
     generated = extract_rule_from_plan_body(plan.body)

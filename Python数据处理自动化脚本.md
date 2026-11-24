@@ -73,7 +73,9 @@ pip install pandas openpyxl
 | `sources.py` | 多数据源读取、join/union、键对齐、膨胀保护、上传落盘与安全校验 | 核心 + rules |
 | `task_profile.py` | 任务类型识别（9 类）与 KPI / 图表 / 表格规划（`TaskProfile`） | 核心 |
 | `charts_svg.py` | 纯 SVG 图表：环形、横向条、帕累托、折线、柱状、散点、热力 | 核心 |
-| `report_task.py` | 任务导向单页 HTML 报告（内联样式 + SVG，可离线打印） | 核心 + charts_svg + task_profile |
+| `report_task.py` | 任务导向单页 HTML 报告（内联样式 + SVG，可离线打印），章节编排委托展示模板引擎 | display_templates + charts_svg + task_profile |
+| `display_templates.py` | 场景化展示模板引擎：12 类典型场景 → 展示方式映射、目标/规模/字段驱动的块选择、可注册块渲染器 | 核心 + charts_svg + formatting |
+| `display_showcase.py` | 展示样例生成器：真实数据 + 画像，产出演示/汇报/使用说明三类 HTML 与场景总览页 | display_templates + task_profile |
 | `doc_extract.py` | PDF/DOCX/TXT/图片解析 → 统一中间结构 → 结构化抽取 | pypdf / python-docx（可选） |
 | `exporters.py` | 结果 CSV/Excel（多 sheet）/JSON、附表 `table_N.csv`、规则 JSON、抽取结果、执行摘要、下载路径安全 | 核心 |
 | `webapp.py` | 本地 Web 三页工作台 + 多数据源上传（Flask，缺失时降级标准库 `http.server`） | Flask（可选） |
@@ -394,7 +396,45 @@ flowchart LR
 
 ---
 
-### 9.8 可生长算子体系（分层 + 注册 + 契约 + 编译，version 2.0）
+### 9.10 场景化展示模板系统（数据处理场景 ↔ 展示方式）
+
+报告层由 `display_templates.py` 统一驱动：把「数据处理场景」与「展示方式」解耦，
+同一份结果可按需切换展示模板，并保留原有生成能力。
+
+**典型场景 → 推荐展示方式**（`SCENARIO_CATALOG` 为单一事实源）：
+
+| 场景 | 卡片 | 图表 | 表格 | 摘要/附录 |
+| --- | --- | --- | --- | --- |
+| 数据清洗 | 清洗规模 | 条形 | 处置明细 | 质量基线 + 步骤 |
+| 统计分析 | 核心指标 | 直方图/分布 | 统计摘要 | 口径说明 |
+| 分组汇总 | 头部分组 | 条形/环形 | 分组结果 | 口径说明 |
+| 趋势对比 | 峰值/环比 | 折线 | 逐期明细 | 均价口径 |
+| 异常识别 | 异常规模 | 柱状（可选） | 异常明细 | 检测边界附录 |
+| 占比构成 | 比率/分子分母 | 环形/帕累托 | 占比明细 | 口径说明 |
+| 排名分析 | 冠军/CR3 | 横向条 | 排名明细 | 口径说明 |
+| 分布分析 | 主区间 | 柱状 | 区间计数 | 口径说明 |
+| 相关分析 | 相关系数 | 散点/热力 | 系数明细 | 口径说明 |
+| 透视分析 | 交叉规模 | 热力图 | 透视原表 | 口径说明 |
+| 多表合并 | 匹配率 | 环形/分布条 | 合并结果 | 关联质量 |
+| 明细查看 | 结果规模 | 不渲染 | 逐行明细 | 口径说明 |
+
+**模板选择四维依据**：
+
+1. **数据类型**：数值字段 → 直方图/散点；类别字段 → 条形/环形；时间字段 → 折线。
+2. **字段特征**：低基数字段适合构成图，高基数 ID 类字段跳过图表只入表格。
+3. **结果规模**：小（≤50 行）保留完整明细；大（>500 行）收紧表格行数、图表只用聚合后小数据。
+4. **展示目标**：`demo` 演示突出卡片图表、`report` 汇报补齐结论附录、`guide` 使用说明追加算子链路与选择理由。
+
+**扩展方式**：新增展示形态只需 `@dt.register_block(kind)` 注册渲染函数；新增场景只需在
+`SCENARIO_CATALOG` 增加一条 `ScenarioSpec`。`render_sections(..., goal/template/blocks)`
+支持显式配置模板覆盖自动选择。
+
+**演示产物**：`python etl_pipeline.py showcase --output-dir output/showcase` 生成
+`index.html` 场景总览页 + 11 类场景 × 3 种目标的 33 个自包含 HTML，可直接用于演示、汇报与使用说明。
+
+---
+
+### 9.11 可生长算子体系（分层 + 注册 + 契约 + 编译，version 2.0）
 
 算子能力从"散落在多处 if-elif 的扁平实现"升级为可生长、可组合的系统，核心是**单一事实源**（`ops/registry.py` 的 `OpSpec`）：每个算子只声明一次（参数、引用列、新增列、清洗保护列、校验钩子、执行函数、任务类型提示、提示词示例），校验、编译、执行、提示词、任务画像全部从注册表读取。
 
@@ -646,7 +686,9 @@ pytest -q tests/test_offline_flow.py tests/test_llm_config.py
 | 模块 | 职责 |
 | --- | --- |
 | `ops/prompt_kit.py` | 18 条硬约束、skill 风格渐进式引用（索引 → 命中技能正文）、任务族路由、少样本 + 错误示例、真实列/取值上下文、比值/日期/计数/加权均价确定性提示、输出前最后核对 |
-| `ops/rule_eval.py` | 语义评测器：判据列误入筛选、分组只写 options、日期条件错写、比率方向、明细混入汇总、组合流程漏阶段/漏公式/漏季度等 20+ 错误码 |
+| `ops/rule_eval.py` | 语义评测器：Schema 主路径走纯结构复评（重新编译核对步骤/task_type、列引用、条件互斥、比值分母成对过滤）；旧规则保留中文语义守门，仅作兼容路径 |
+| `ops/intent_schema.py` | 结构化意图 Schema v1.0：LLM 只填受约束的意图表，确定性编译器产出步骤；校验同时输出结构化错误码（unknown_column / unresolved_columns 等），评测器不再读中文错误文本 |
+| `evaluate_schema_accuracy.py` | 真实模型评测：独立期望断言全部按规则结构比对，异常输入按结构化错误码判定拒绝；不再做中文关键词/子串匹配 |
 | `ops/prompt_repair.py` | 纯结构修复：把嵌套在 `filter.conditions` 里的 `date_filter` 提升为顶层步骤 |
 | `ops/intent.py` | 通用工作流编译器：按描述顺序自由编排 dedupe / filter / expr / date_part / fill / aggregate 等小原语；比率与明细骨架仍作为高置信度兜底 |
 | `ops/builtin/value_ops.py` | `expr` 原语用 `c0/c1` 引用 operands，安全解析四则运算与白名单函数；`date_part.bucket` 把 year+quarter 等分量拼成跨年安全的时间桶 |
@@ -667,6 +709,8 @@ pytest -q tests/test_offline_flow.py tests/test_llm_config.py
 - **闭环修复**：语义评测不通过时把错误码回灌模型，只保留问题更少的一版，避免「修一个坏一个」。
 - **JSON 容错**：`Expecting property name enclosed in double quotes` 这类尾逗号/注释/弯引号由状态机清洗后再解析；仍失败时把错误原文回灌模型重生成一次。
 - **动态界面/报告**：结果页和任务报告消费 `profile.panels`；质量报告按本次分析动作选择趋势线/周期覆盖度、交叉热力、分组对比或通用分布/相关图，趋势场景不再出现无关的相关性热力图。
+- **Schema 主路径**：`rules.generate_rules(..., generation_path='schema')` 为默认入口；描述 → 真实 LLM 填 Schema → 结构校验 → 确定性编译 → 结构复评。旧「模型直接输出规则 JSON + 中文正则编译」链路保留为 `generation_path='legacy'` 与 CLI `--generation-path legacy`，仅供回归诊断；Web 界面已移除 opt-in 开关，生成后展示 Schema 任务类型、算子链、模型假设、未解析字段与编译说明。
+- **评测去关键词化**：`evaluate_schema_accuracy.py` 的别名断言改为完整相等，异常输入拒绝只认 `LLMError.codes` 中的 `unknown_column` / `unresolved_columns`；`ops/rule_eval.py` 对带 `intent_schema` 的规则不解析任何中文文本。
 
 正确率度量（33 个场景，覆盖全部任务族，直接调用真实在线模型，未经意图编译兜底）：
 
@@ -675,7 +719,7 @@ python measure_prompt_accuracy.py                 # 生成即正确率，报告 
 RUN_REAL_LLM_TESTS=1 pytest -q tests/test_prompt_engineering.py::test_real_llm_generation_accuracy_at_least_90_percent
 ```
 
-最近一次运行 **33/33 正确（100%）**，模型 `glm-4-flash-250414`；离线回归 `pytest -q` 为 735 passed / 29 skipped。
+最近一次运行 **33/33 正确（100%）**，模型 `glm-4-flash-250414`；Schema 主路径真实评测 **25/25 正确（100%）**（`python evaluate_schema_accuracy.py`，报告 `output/schema_accuracy_report.md`）。离线回归 `pytest -q` 为 **832 passed / 29 skipped**（含新增的结构化复评、前端面板与场景化展示模板离线测试；真实模型用例在 API 未被限时通过，偶发 HTTP 429 限流时单独重试即可，与展示层无关）。
 
 组合场景端到端验证（正常 / 跨年 / 缺失 / 重复 / 边界面积 / 异常价格共 9 类）严格走
 `POST /plan → /execute → GET /result`，逐条记录生成步骤、执行状态、结果表与断言：
@@ -701,6 +745,7 @@ pytest -q tests/test_scenario_combinations.py
 | `execution_summary.json` | 执行摘要：阶段耗时、指标、步骤日志、任务画像、产物清单 |
 | `task_report_*.html` | 任务报告：任务 KPI、图表、结论、结果表与可折叠质量附录 |
 | `quality_report_*.html` | 静态质量报告（沿用既有渐变卡片 + SVG 图表，保持兼容） |
+| `showcase/index.html` + `showcase/*_{demo,report,guide}.html` | 场景化展示模板样例（总览页 + 11 场景 × 3 目标），由 `etl_pipeline.py showcase` 生成 |
 | `extraction.json` / `extraction.csv` | 文档结构化抽取结果（抽取链路） |
 
 ---
@@ -711,6 +756,7 @@ pytest -q tests/test_scenario_combinations.py
 - **算子规模**：54 个声明式算子，以 `ops.registry` 实际注册为准；完整清单见 `ops/registry` 与 `ops/builtin`，第 9.3 / 9.5 节表格只列出常用算子。
 - **核心依赖**：核心管道仅依赖 pandas / openpyxl（numpy 随 pandas 安装），扩展依赖均为可选。
 - **LLM 能力边界**：无 `LLM_API_KEY` 时自然语言规则生成与文档抽取不可用（明确报错）；离线可通过 CLI `--rule-file` 或工作台「显式规则 JSON」执行已有规则，不再提供关键词 Mock 模板。
+- **展示层**：`display_templates.py` 统一驱动任务报告章节，12 类场景 × 4 维选择依据（数据类型 / 字段特征 / 结果规模 / 展示目标），块渲染器可注册扩展；`showcase` 子命令产出演示/汇报/使用说明样例。
 - **产品定位**：本地单机工具，不提供鉴权、多用户与网络暴露能力；Web 仅绑定 `127.0.0.1`。
 
 ---

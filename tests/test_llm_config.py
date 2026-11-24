@@ -135,7 +135,7 @@ def test_urllib_transport_calls_online_endpoint(fake_endpoint, isolated_llm, mon
 
 
 def test_get_provider_online_drives_rule_generation(fake_endpoint, isolated_llm, monkeypatch):
-    from rules import generate_rules
+    from rules import generate_rules_legacy as generate_rules
 
     url, calls = fake_endpoint
     monkeypatch.setenv("LLM_BASE_URL", url)

@@ -277,6 +277,7 @@ def test_full_generate_then_execute_chain_with_broken_llm_output(sample_csv, tmp
         "intent": INTENT_MISS,
         "source": {"path": sample_csv, "format": "csv"},
         "columns": COLS,
+        "generation_path": "legacy",
     }
     provider = FixtureProvider(rule={
         "version": "2.0", "task_type": "summary",

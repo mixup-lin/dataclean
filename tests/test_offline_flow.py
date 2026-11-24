@@ -37,7 +37,7 @@ def _cli_env():
 
 
 def test_explicit_rule_generation_uses_injected_rule():
-    from rules import assert_valid_rule, generate_rules
+    from rules import assert_valid_rule, generate_rules_legacy as generate_rules
 
     intent = "中位数填充缺失值，剔除常数列，导出 csv"
     cols = ["起拍价(元)", "成交价(元)", "状态"]
@@ -175,7 +175,7 @@ def test_extract_text_and_image_use_explicit_provider(tmp_path):
 def test_no_credentials_fails_loudly_instead_of_guessing(monkeypatch):
     """移除 Mock 后，无凭据 + 无显式规则必须明确报错，不能悄悄编规则。"""
     import llm_provider
-    from rules import generate_rules
+    from rules import generate_rules_legacy as generate_rules
 
     for key in ("LLM_API_KEY", "OPENAI_API_KEY", "LLM_PROVIDER"):
         monkeypatch.delenv(key, raising=False)

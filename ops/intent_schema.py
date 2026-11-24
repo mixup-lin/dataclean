@@ -10,9 +10,10 @@
 
 兼容与迁移
 ----------
-* 旧入口 ``ops.intent.parse_*`` 全部保留，仍作为 schema 不可用时的兜底；
-* ``rules.generate_rules`` 新增可选参数 ``intent_schema``，传入时优先采用
-  schema 编译结果；未传入时行为与旧版完全一致；
+* ``rules.generate_rules`` 默认走本模块的结构化 Schema 路径；旧入口
+  ``ops.intent.parse_*`` 保留在 ``generation_path='legacy'`` 兼容链路中；
+* 校验结果带结构化错误码（``SchemaResult.error_codes``），评测器据此判断
+  拒绝类型，不扫描中文错误文本；
 * ``parse_intent_schema`` 只在真实生成链路上调用，不 mock 任何检查环节。
 """
 from __future__ import annotations
@@ -142,6 +143,8 @@ class SchemaResult:
     columns: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
+    # 结构化错误码：调用方/评测器据此判断拒绝类型，不解析中文错误文本。
+    error_codes: List[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -173,8 +176,9 @@ def _plain(value: Any) -> str:
     return str(value or "").replace(" ", "").replace("　", "").strip()
 
 
-def _resolve(word: Any, columns: Sequence[str], aliases: Optional[Dict[str, str]],
-             known: Set[str], errors: List[str], tag: str, derived: Set[str]) -> str:
+def _resolve_impl(word: Any, columns: Sequence[str], aliases: Optional[Dict[str, str]],
+                  known: Set[str], errors: List[str], tag: str, derived: Set[str],
+                  code_out: Optional[List[str]] = None) -> str:
     text = str(word or "").strip()
     if not text:
         errors.append(f"{tag} 不能为空")
@@ -185,6 +189,8 @@ def _resolve(word: Any, columns: Sequence[str], aliases: Optional[Dict[str, str]
     if resolved:
         return resolved
     errors.append(f"{tag} 引用了未知列 {text!r}；只能使用真实列或前置步骤派生列")
+    if code_out is not None:
+        code_out.append("unknown_column")
     return ""
 
 
@@ -196,8 +202,15 @@ def validate_schema(
     """校验 LLM 输出的意图 Schema；返回归一化的 SchemaResult（永不抛异常）。"""
     errors: List[str] = []
     notes: List[str] = []
+    codes: List[str] = []
+
+    def _resolve(*args: Any, **kwargs: Any) -> str:
+        # 保持既有调用点不变，同时把未知列记为结构化错误码。
+        return _resolve_impl(*args, **kwargs, code_out=codes)
+
     if not isinstance(payload, dict):
-        return SchemaResult({}, list(columns), ["意图 Schema 必须是 JSON 对象"])
+        return SchemaResult({}, list(columns), ["意图 Schema 必须是 JSON 对象"],
+                            error_codes=["schema_not_object"])
 
     version = str(payload.get("version", "")).strip()
     if version != SCHEMA_VERSION:
@@ -226,6 +239,7 @@ def validate_schema(
     unresolved = [str(x).strip() for x in unresolved or [] if str(x).strip()]
     if unresolved:
         errors.append("需求包含无法映射到真实列的字段，已拒绝猜测：" + "、".join(unresolved[:5]))
+        codes.append("unresolved_columns")
 
     operations = payload.get("operations")
     if not isinstance(operations, list) or not operations:
@@ -468,11 +482,14 @@ def validate_schema(
         final_task_type = "summary"
         notes.append("task_type 按算子结构由 count_group 归一为 summary（分组聚合而非纯计数）")
 
+    if errors and not codes:
+        codes.append("schema_invalid")
     return SchemaResult(
         payload={**payload, "task_type": final_task_type, "operations": normalized},
         columns=[str(c) for c in columns],
         errors=errors,
         notes=notes,
+        error_codes=sorted(set(codes)),
     )
 
 
@@ -973,6 +990,7 @@ def parse_intent_schema(
                             "llm_errors": []}
     result: Optional[SchemaResult] = None
     last_errors: List[str] = []
+    last_codes: List[str] = []
     for attempt in range(max_attempts):
         meta["attempts"] += 1
         try:
@@ -981,11 +999,14 @@ def parse_intent_schema(
         except (LLMError, ValueError, TypeError) as exc:
             meta["llm_errors"].append(str(exc)[:300])
             last_errors = [f"LLM 响应解析失败：{str(exc)[:200]}"]
+            last_codes = ["llm_parse_failed"]
         else:
             result = validate_schema(payload, columns, aliases)
             last_errors = list(result.errors)
+            last_codes = list(result.error_codes)
             if result.ok:
                 meta["errors"] = []
+                meta["error_codes"] = []
                 meta["elapsed"] = round(time.monotonic() - started, 3)
                 return result, meta
         if attempt + 1 < max_attempts:
@@ -996,6 +1017,7 @@ def parse_intent_schema(
             )
             user = json.dumps(repair, ensure_ascii=False)
     meta["errors"] = last_errors
+    meta["error_codes"] = sorted(set(last_codes))
     meta["elapsed"] = round(time.monotonic() - started, 3)
     return None, meta
 

@@ -71,6 +71,7 @@ def _post_plan(path: str, state) -> dict:
         reply = webapp.handle_request("POST", "/plan", {}, {
             "intent": [INTENT], "source_path": [path], "source_format": ["csv"],
             "columns": [",".join(COLUMNS)], "formats": ["csv"], "report": ["1"],
+            "generation_path": ["legacy"],
         }, state)
     finally:
         rules.get_provider = original
@@ -175,7 +176,7 @@ def test_generate_rules_retries_after_parse_failure():
             }, ensure_ascii=False)
 
     provider = FlakyProvider()
-    rule, meta = rules.generate_rules(
+    rule, meta = rules.generate_rules_legacy(
         "统计每个区县的数据条数",
         {"path": "x.csv", "format": "csv"},
         ["区县"],

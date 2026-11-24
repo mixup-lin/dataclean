@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+import display_templates as dt
 from charts_svg import render_chart
 from etl_pipeline import _esc, _fmt_num
 from task_profile import TASK_LABELS, TaskProfile
@@ -247,6 +248,27 @@ def _contract_html(
     )
 
 
+def _build_context(
+    profile: TaskProfile,
+    rule: Optional[Dict[str, Any]],
+    clean_report: Optional[Dict[str, Any]],
+    step_logs: Optional[List[Dict[str, Any]]],
+    join_stats: Optional[List[Dict[str, Any]]],
+) -> dt.DisplayContext:
+    """把既有画像与执行产物封装为展示层上下文（单一数据入口）。"""
+    frame = profile.tables[0].get("frame") if profile.tables else None
+    if not isinstance(frame, pd.DataFrame):
+        frame = pd.DataFrame()
+    return dt.DisplayContext(
+        profile=profile,
+        rule=rule or {},
+        frame=frame,
+        clean_report=clean_report or {},
+        step_logs=list(step_logs or []),
+        join_stats=list(join_stats or []),
+    )
+
+
 def render_sections(
     profile: TaskProfile,
     rule: Optional[Dict[str, Any]] = None,
@@ -254,62 +276,43 @@ def render_sections(
     clean_report: Optional[Dict[str, Any]] = None,
     step_logs: Optional[List[Dict[str, Any]]] = None,
     join_stats: Optional[List[Dict[str, Any]]] = None,
+    goal: str = "report",
+    template: Optional[str] = None,
+    blocks: Optional[List[str]] = None,
 ) -> str:
-    """按画像的 panels 声明动态编排报告章节，空载荷自动跳过。"""
+    """按场景展示模板动态编排报告章节，空载荷自动跳过。
+
+    展示层由 :mod:`display_templates` 统一驱动：依据数据类型、字段特征、
+    结果规模与展示目标选择块序列；``template`` / ``blocks`` 提供显式配置入口。
+    任务结论、附表、数据质量附录与环节契约始终保留，确保说明完整。
+    """
     rule = rule or {}
     clean_report = clean_report or {}
-    panels = [p for p in profile.panels if isinstance(p, dict) and p.get("kind")]
-    if not panels:
-        panels = [
-            {"kind": "kpi", "title": "指标概览", "source": "kpis"},
-            {"kind": "chart", "title": "图表", "source": "charts"},
-            {"kind": "table", "title": "结果表", "source": "tables"},
-        ]
-    frame = profile.tables[0].get("frame") if profile.tables else None
-    if not isinstance(frame, pd.DataFrame):
-        frame = pd.DataFrame()
-    blocks: List[str] = []
-    for panel in panels:
-        kind = str(panel.get("kind", ""))
-        title = str(panel.get("title", ""))
-        hint = str(panel.get("hint", ""))
-        if kind == "kpi":
-            blocks.append(_section(title, _kpis_html(profile.kpis), hint))
-        elif kind == "chart":
-            allowed = set(panel.get("chart_kinds") or ())
-            charts = [
-                c for c in profile.charts
-                if not allowed or str(c.get("kind")) in allowed
-            ]
-            blocks.append(_section(title, _charts_html(charts), hint, cls="chart-section"))
-        elif kind == "join":
-            if join_stats:
-                rows = "".join(
-                    f"<li>{_esc(json.dumps(s, ensure_ascii=False))}</li>"
-                    for s in join_stats[:5]
-                )
-                blocks.append(_section(title, f"<ul>{rows}</ul>", hint))
-        elif kind == "table":
-            note = f"输出：{title}，最多展示 {MAX_REPORT_ROWS} 行。"
-            blocks.append(_section(title, _table_html(frame), note or hint))
-        elif kind == "note":
-            blocks.append(_section(title, f'<p class="conclusion">{_esc(profile.conclusion)}</p>', hint))
-    # 任务结论按画像生成，措辞随场景变化
-    conclusion = (
-        f'<p class="conclusion">{_esc(profile.conclusion or "—")}</p>'
-        f'<p class="hint">{_esc(profile.note or "")}</p>'
-    )
-    blocks.append(_section("任务结论", conclusion))
+    ctx = _build_context(profile, rule, clean_report, step_logs, join_stats)
+    frame = ctx.main_frame()
+    plan = dt.build_plan(ctx, goal=goal, template=template, blocks=blocks)
+
+    blocks_html: List[str] = [dt.render_sections(plan, ctx)]
+
+    # 任务结论按画像生成，措辞随场景变化（note 摘要块已渲染时避免重复口径）
+    has_summary = any(b.kind == "summary" for b in plan.blocks)
+    has_note = any(b.kind == "note" for b in plan.blocks)
+    if not has_summary:
+        conclusion = f'<p class="conclusion">{_esc(profile.conclusion or "—")}</p>'
+        if not has_note and profile.note:
+            conclusion += f'<p class="hint">{_esc(profile.note)}</p>'
+        blocks_html.append(_section("任务结论", conclusion))
+
     aux = _aux_html(profile.tables[1:])
     if aux:
-        blocks.append(_section("附表", aux, "维度与关联等补充结果"))
+        blocks_html.append(_section("附表", aux, "维度与关联等补充结果"))
     appendix = _appendix(frame, clean_report, step_logs)
-    blocks.append(
+    blocks_html.append(
         '<details class="fold"><summary>附录 · 数据质量与清洗说明（点击展开）</summary>'
         f"<div>{appendix}</div></details>"
     )
-    blocks.append(_contract_html(profile, rule, step_logs))
-    return "\n".join(b for b in blocks if b)
+    blocks_html.append(_contract_html(profile, rule, step_logs))
+    return "\n".join(b for b in blocks_html if b)
 
 
 def render_task_report(
@@ -320,8 +323,15 @@ def render_task_report(
     join_stats: Optional[List[Dict[str, Any]]] = None,
     clean_report: Optional[Dict[str, Any]] = None,
     step_logs: Optional[List[Dict[str, Any]]] = None,
+    goal: str = "report",
+    template: Optional[str] = None,
+    blocks: Optional[List[str]] = None,
 ) -> str:
-    """渲染任务报告并写入运行目录，返回报告绝对路径（失败返回空串）。"""
+    """渲染任务报告并写入运行目录，返回报告绝对路径（失败返回空串）。
+
+    ``goal`` / ``template`` / ``blocks`` 用于配置展示模板：
+    演示(demo) / 汇报(report) / 使用说明(guide)，或显式指定场景与块序列。
+    """
     frame = pd.DataFrame()
     if profile.tables:
         candidate = profile.tables[0].get("frame")
@@ -364,6 +374,7 @@ def render_task_report(
             clean_report=clean_report,
             step_logs=step_logs,
             join_stats=join_stats,
+            goal=goal, template=template, blocks=blocks,
         ),
         STYLE=css,
         FOOTER=(

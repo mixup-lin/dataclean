@@ -69,7 +69,7 @@ MAX_BODY_BYTES = 256 * 1024 * 1024  # 256 MiB
 WAIT_HTML = """
 <div id="dc-wait" class="dc-wait" aria-hidden="true">
   <div class="dc-wait-card" role="status" aria-live="polite">
-    <div class="dc-spinner"><i></i><i></i><i></i></div>
+    <div class="dc-spinner" aria-hidden="true"><i></i><i></i><i></i></div>
     <div class="dc-wait-title" id="dc-wait-title">正在处理…</div>
     <div class="dc-wait-stage" id="dc-wait-stage">读取数据源…</div>
     <div class="dc-wait-track"><div class="dc-wait-bar" id="dc-wait-bar"></div></div>
@@ -194,7 +194,12 @@ class Reply:
 
 
 def render(page: str, **values: Any) -> str:
-    """读取 pages/*.html 并替换 {{KEY}} 占位符（不依赖模板引擎）。"""
+    """读取 pages/*.html 并替换 {{KEY}} 占位符（不依赖模板引擎）。
+
+    服务端骨架 100% 保留（无 JS 时功能完整、测试契约不变量）；Vue 3 + Naive UI
+    作为渐进增强层在浏览器端接管视觉与交互。页面标识写入 body data 属性供前端
+    引导脚本选择对应组件。
+    """
     text = (PAGES / page).read_text(encoding="utf-8")
     for key, value in values.items():
         text = text.replace("{{" + key + "}}", str(value))
@@ -204,6 +209,16 @@ def render(page: str, **values: Any) -> str:
     elif "id=\"dc-wait\"" not in text:
         text = text.replace("</body>", WAIT_HTML + "\n</body>", 1)
     text = re.sub(r"\{\{[A-Z0-9_]+\}\}", "", text)
+    # 注入 Vue 渐进增强层（本地 bundle；加载失败时 SSR 骨架原样可用）
+    page_key = Path(page).stem
+    text = text.replace(
+        "<body ", f'<body data-dc-page="{page_key}" ', 1
+    ) if "<body " in text else text
+    boot = (
+        '<script id="dc-vue-bundle" src="/static/vendor/naive-vue.js" defer></script>\n'
+        '<script src="/static/vendor/app.js" defer></script>\n'
+    )
+    text = text.replace("</body>", boot + "</body>", 1)
     return text
 
 
@@ -251,15 +266,19 @@ def _nav(active: str) -> str:
         ("jobs", "/jobs", "后台任务"),
     ]
     items = "".join(
-        f'<a class="{"active" if key == active else ""}" href="{href}">{label}</a>'
+        f'<a class="{"active" if key == active else ""}" href="{href}"'
+        + (' aria-current="page"' if key == active else '')
+        + f'>{label}</a>'
         for key, href, label in links
     )
     return (
+        '<a class="skip-link" href="#main">跳到主要内容</a>'
         '<header class="topbar"><div class="brand">'
-        '<div class="brand-mark">DC</div><div>DataClean<span class="brand-sub">/ ETL Console</span></div>'
-        '</div><nav class="nav">' + items + '</nav><div class="topbar-right">'
-        f'<span class="{badge_cls}" title="{_esc(badge_title)}">'
-        f'<span class="dot"></span>{_esc(badge_text)} · {_esc(model_label)}</span>'
+        '<div class="brand-mark" aria-hidden="true">DC</div>'
+        '<div>DataClean<span class="brand-sub">/ ETL Console</span></div>'
+        '</div><nav class="nav" aria-label="主导航">' + items + '</nav><div class="topbar-right">'
+        f'<span class="{badge_cls}" title="{_esc(badge_title)}" role="status">'
+        f'<span class="dot" aria-hidden="true"></span>{_esc(badge_text)} · {_esc(model_label)}</span>'
         '</div></header>'
     )
 
@@ -570,6 +589,63 @@ def _rule_task_badge(rule: Optional[Dict[str, Any]]) -> str:
         return ""
 
 
+def _schema_panel_html(meta: Optional[Dict[str, Any]]) -> str:
+    """展示 Schema 主路径的解析结果、假设与未解析列（全部按纯结构渲染）。"""
+    if not meta:
+        return ""
+    schema = meta.get("schema")
+    if not isinstance(schema, dict):
+        return (
+            '<div class="schema-panel"><div class="schema-head">'
+            '<b>结构化意图 Schema</b><span class="tag">主路径</span></div>'
+            '<p class="hint">本次未生成 Schema：使用了规则库或显式规则 JSON，'
+            '不需要 LLM 解析。</p></div>'
+        )
+    operations = schema.get("operations") or []
+    kinds = [str(op.get("kind")) for op in operations if isinstance(op, dict)]
+    chips = "".join(f'<span class="op-chip">{_esc(kind)}</span>' for kind in kinds)
+    attempts = (meta.get("intent_schema") or {}).get("attempts") or meta.get("llm_attempts") or 0
+    parts = [
+        '<div class="schema-panel">',
+        '<div class="schema-head"><b>结构化意图 Schema</b>'
+        '<span class="tag">主路径</span></div>',
+        '<div class="schema-meta">'
+        f'<span>任务类型 <code>{_esc(schema.get("task_type", ""))}</code></span>'
+        f'<span>算子 {len(kinds)}</span><span>模型调用 {_esc(attempts)}</span>'
+        '</div>',
+        f'<div class="op-flow">{chips or "<span class=hint>无算子</span>"}</div>',
+    ]
+    unresolved = schema.get("unresolved_columns") or []
+    if unresolved:
+        parts.append(
+            '<div class="alert warn">未解析字段：'
+            + "、".join(_esc(str(x)) for x in unresolved)
+            + "；这些字段未参与规则，请补充列名映射。</div>"
+        )
+    assumptions = schema.get("assumptions") or []
+    if assumptions:
+        parts.append(
+            '<details class="fold"><summary>模型假设（仅提示，不作为正确依据）</summary>'
+            '<div><ul>' + "".join(f"<li>{_esc(str(x))}</li>" for x in assumptions)
+            + "</ul></div></details>"
+        )
+    issues = meta.get("semantic_issues") or []
+    if issues:
+        parts.append(
+            '<div class="alert warn">语义复评提示：'
+            + "；".join(_esc(str(x)) for x in issues[:3]) + "</div>"
+        )
+    notes = meta.get("compile_notes") or []
+    if notes:
+        parts.append(
+            '<details class="fold"><summary>确定性编译说明</summary><div><ul>'
+            + "".join(f"<li>{_esc(str(x))}</li>" for x in notes)
+            + "</ul></div></details>"
+        )
+    parts.append("</div>")
+    return "".join(parts)
+
+
 def _column_hints_html(columns: List[str]) -> str:
     """把探测到的真实列名摆出来，方便使用者写「中文描述 = 真实列名」映射。"""
     if not columns:
@@ -638,12 +714,11 @@ def _workbench(
     rule_input_json: str = "",
     rule_name: str = "",
     saved_rule_id: str = "",
-    schema_mode: bool = False,
 ) -> Reply:
     v = _view_params(query)
     err_html = ""
     if errors:
-        err_html = '<div class="alert error"><b>校验未通过：</b><br>' + "<br>".join(
+        err_html = '<div class="alert error" role="alert"><b>校验未通过：</b><br>' + "<br>".join(
             _esc(e) for e in errors
         ) + "</div>"
     meta_html = ""
@@ -660,6 +735,8 @@ def _workbench(
             f'<div class="alert {"warn" if meta.get("degraded") else "info"}">'
             f'生成来源：{_esc(meta.get("provider", ""))} / {mode} ｜ '
             f'模型：{_esc(meta.get("model", ""))} ｜ 耗时：{_esc(_fmt_num(meta.get("elapsed", 0)))} 秒'
+            + (f"<br>生成链路：{_esc(meta['generation_path'])}"
+               if meta.get("generation_path") else "")
             + ("<br>本次由显式规则驱动，未经 LLM 生成。" if meta.get("mode") == "offline" else "")
             + (
                 "<br>已应用列名映射：" + "、".join(
@@ -711,8 +788,8 @@ def _workbench(
         RULE_INPUT_JSON=_esc(rule_input_json),
         COLUMN_HINTS=_column_hints_html(hinted),
         FORMAT_CHECKS=_format_checks(formats or []),
-        SCHEMA_MODE_CHECKED="checked" if schema_mode else "",
         ERRORS=err_html, RULE_META=meta_html, RULE_TASK=_rule_task_badge(rule),
+        SCHEMA_PANEL=_schema_panel_html(meta),
         RULE_JSON_RAW=_esc(rule_raw), RULE_PREVIEW=rule_preview,
         CONTRACT=CONTRACT_RULES, RUNS=_runs_html(base_output),
         EXTRA1_OPEN="open" if extras[0]["alias"] else "",
@@ -1187,7 +1264,7 @@ def _extract_page(
         schema_text = schema_to_text(DEFAULT_SCHEMA)
     err_html = ""
     if errors:
-        err_html = '<div class="alert error"><b>抽取失败：</b><br>' + "<br>".join(
+        err_html = '<div class="alert error" role="alert"><b>抽取失败：</b><br>' + "<br>".join(
             _esc(e) for e in errors
         ) + "</div>"
     if notice:
@@ -1464,6 +1541,20 @@ def handle_request(
         css = (STATIC / "style.css").read_text(encoding="utf-8")
         return Reply(body=css, content_type="text/css; charset=utf-8")
 
+    # 本地化前端 bundle（Vue 3 + Naive UI，构建期打入、运行时零 CDN）
+    m = re.match(r"^/static/vendor/([A-Za-z0-9_.-]+)$", path)
+    if m:
+        vendor = (STATIC / "vendor" / m.group(1)).resolve()
+        vendor_dir = (STATIC / "vendor").resolve()
+        # 路径白名单：只允许 vendor 目录内已存在的普通文件，防止越权读取
+        if vendor.parent == vendor_dir and vendor.is_file():
+            ctype = ("application/javascript; charset=utf-8" if vendor.suffix == ".js"
+                     else "text/css; charset=utf-8" if vendor.suffix == ".css"
+                     else "application/octet-stream")
+            return Reply(body=vendor.read_bytes(), content_type=ctype,
+                         headers={"Cache-Control": "public, max-age=3600"})
+        return Reply(status=404, body="not found")
+
     # 后台任务：状态 JSON / 进度页 / 结果取回 / 任务列表
     m = re.match(r"^/job/([^/]+)/status$", path)
     if m:
@@ -1626,7 +1717,7 @@ def handle_request(
         rule_input = _form_value(form, "rule_json").strip()
         saved_rule_id = _form_value(form, "saved_rule_id").strip()
         rule_name = _form_value(form, "rule_name").strip()
-        schema_mode = _form_value(form, "schema_mode").strip() == "1"
+        generation_path = _form_value(form, "generation_path", "schema").strip() or "schema"
         formats = _form_list(form, "formats") or ["csv"]
         wants_report = "1" in _form_list(form, "report")
         if not intent:
@@ -1638,8 +1729,7 @@ def handle_request(
         sources: Dict[str, Any] = {}
         try:
             from rules import (
-                generate_rules, generate_rules_from_schema,
-                parse_column_aliases, probe_columns, validate_rule,
+                generate_rules, parse_column_aliases, probe_columns, validate_rule,
             )
 
             sources = _collect_sources(form, files)
@@ -1692,20 +1782,15 @@ def handle_request(
                 }
                 if alias_map:
                     rule["column_aliases"] = dict(alias_map)
-            elif schema_mode:
-                # 结构化意图 Schema：真实 LLM 解析 → 确定性编译，不经中文正则兜底
-                rule, meta = generate_rules_from_schema(
-                    intent, source, cols,
-                    sources=sources if multi else None,
-                    source_columns=source_columns,
-                    column_aliases=alias_text,
-                )
             else:
+                # 默认主路径：结构化意图 Schema。旧规则 DSL 仅在显式
+                # generation_path=legacy 时启用，用于回归诊断。
                 rule, meta = generate_rules(
                     intent, source, cols,
                     sources=sources if multi else None,
                     source_columns=source_columns,
                     column_aliases=alias_text,
+                    generation_path=generation_path,
                 )
             rule["output"] = {"formats": formats, "report": wants_report}
             all_cols = list(dict.fromkeys(
@@ -1720,7 +1805,6 @@ def handle_request(
                     sources=sources, column_aliases=alias_text,
                     rule_input_json=rule_input,
                 saved_rule_id=saved_rule_id, rule_name=rule_name,
-                schema_mode=schema_mode,
             )
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("Web 规则生成失败: %s", type(exc).__name__)
@@ -1730,7 +1814,6 @@ def handle_request(
                 columns=columns, formats=formats, errors=[str(exc)],
                 sources=sources, column_aliases=alias_text,
                 rule_input_json=rule_input,
-                schema_mode=schema_mode,
             )
         if path == "/plan":
             return _workbench(
@@ -1740,7 +1823,6 @@ def handle_request(
                 sources=sources, column_aliases=alias_text,
                 rule_input_json=rule_input,
                 saved_rule_id=saved_rule_id, rule_name=rule_name,
-                schema_mode=schema_mode,
             )
         try:
             from rule_executor import execute_rule

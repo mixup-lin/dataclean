@@ -38,6 +38,7 @@ def _run(scenario: Dict[str, Any], base: Path) -> Dict[str, Any]:
         plan = webapp.handle_request("POST", "/plan", {}, {
             "intent": [scenario["intent"]], "source_path": [str(path)],
             "source_format": ["csv"], "formats": ["csv"], "report": ["1"],
+            "generation_path": ["legacy"],
         }, state)
     finally:
         rules.get_provider = original

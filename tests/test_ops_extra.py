@@ -398,7 +398,7 @@ def test_generate_rules_applies_user_mapping():
     """显式规则链路也会把使用者映射写进规则与提示词，不做任何内置语义猜测。"""
     english = ["city", "end_time", "community", "price"]
     rule = make_rule(source_path="x.csv", steps=[{"op": "filter", "column": "city", "operator": "eq", "value": "福州"}])
-    generated, meta = rules.generate_rules(
+    generated, meta = rules.generate_rules_legacy(
         USER_INTENT, {"path": "x.csv", "format": "csv"}, english,
         provider=FixtureProvider(rule=rule),
         column_aliases={"地区": "city", "结束时间": "end_time", "小区": "community"},

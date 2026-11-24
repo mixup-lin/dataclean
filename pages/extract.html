@@ -10,7 +10,7 @@
 <body class="{{BODY_CLASS}}">
 {{NAV}}
 
-<div class="page-wrap">
+<div class="page-wrap" id="main">
   <section class="hero">
     <div class="kicker">Document → Structured Output</div>
     <h1>文档结构化数据抽取</h1>
@@ -50,7 +50,7 @@
         <details class="fold" {{ECO_OPEN}}>
           <summary>节能模式（语义定位 + 滑动窗口，显著降低 token）</summary>
           <div>
-            <label class="checks"><label><input type="checkbox" name="eco" value="1" {{ECO_CHECKED}}> 启用节能模式</label></label>
+            <label class="checks"><input type="checkbox" name="eco" value="1" {{ECO_CHECKED}}> 启用节能模式</label>
             <p class="hint">先按字段语义在原文中定位（本地完成，不调用 LLM），再取命中位置前后 N 字符的窗口片段、合并重叠后交给 LLM；若完全定位不到则自动回退全文。</p>
             <div class="row">
               <label class="field"><span>窗口字符数 N（前后各取）</span><input type="number" name="eco_window" min="20" max="2000" value="{{ECO_WINDOW}}"></label>

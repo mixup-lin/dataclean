@@ -60,7 +60,7 @@ def csv_path(tmp_path):
 def _generate(csv_path, intent, llm_steps, *, task_type="summary"):
     """走完整生成链路：模拟 LLM 输出 → 校验/规整 → 意图编译。"""
     payload = {"intent": intent, "source": {"path": csv_path, "format": "csv"},
-               "columns": COLS}
+               "columns": COLS, "generation_path": "legacy"}
     provider = FixtureProvider(rule={
         "version": "2.0", "task_type": task_type, "steps": llm_steps,
         "options": {"fill_missing": "median", "outlier_method": "none"},
@@ -304,7 +304,7 @@ def test_generate_sanitizes_invalid_llm_operator(csv_path):
     from ops.registry import op_names
 
     payload = {"intent": "按小区统计条数", "source": {"path": csv_path, "format": "csv"},
-               "columns": COLS}
+               "columns": COLS, "generation_path": "legacy"}
     provider = FixtureProvider(rule={
         "version": "2.0", "steps": [{"op": "__import__", "columns": []}],
         "options": {},

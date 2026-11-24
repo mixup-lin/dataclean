@@ -1,0 +1,21 @@
+{
+  "name": "dataclean-webui",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Vue 3 + Naive UI frontend bundle for DataClean (build-time only; runtime is fully offline)",
+  "scripts": {
+    "build": "node build.mjs",
+    "verify:mount": "node verify-mount.mjs",
+    "verify:submit": "node verify-submit.mjs",
+    "verify": "npm run verify:mount && npm run verify:submit"
+  },
+  "dependencies": {
+    "naive-ui": "2.45.3",
+    "vue": "3.5.13"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10",
+    "jsdom": "^31.0.1"
+  }
+}

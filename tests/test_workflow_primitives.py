@@ -145,6 +145,7 @@ def test_frontend_flow_runs_full_formula_quarter_workflow(tmp_path):
         reply = webapp.handle_request("POST", "/plan", {}, {
             "intent": [INTENT], "source_path": [str(path)], "source_format": ["csv"],
             "columns": [",".join(COLUMNS)], "formats": ["csv"], "report": ["1"],
+            "generation_path": ["legacy"],
         }, state)
     finally:
         rules.get_provider = original
@@ -274,6 +275,7 @@ def test_frontend_flow_filters_2026_for_monthly_ratio(tmp_path):
         reply = webapp.handle_request("POST", "/plan", {}, {
             "intent": [INTENT_MONTH], "source_path": [str(path)], "source_format": ["csv"],
             "columns": [",".join(COLUMNS)], "formats": ["csv"], "report": ["1"],
+            "generation_path": ["legacy"],
         }, state)
     finally:
         rules.get_provider = original
@@ -329,7 +331,7 @@ def test_correct_composite_llm_rule_is_not_replaced(tmp_path):
         "steps": [dict(step) for step in spec.steps],
         "output": {"formats": ["csv"], "report": True},
     }
-    rule, meta = rules.generate_rules(
+    rule, meta = rules.generate_rules_legacy(
         INTENT_MONTH, {"path": str(path), "format": "csv"}, COLUMNS,
         provider=FixtureProvider(rule=llm_rule),
     )

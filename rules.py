@@ -1098,6 +1098,7 @@ def generate_rules_from_schema(
         raise LLMError(
             "结构化意图解析失败：" + "；".join(schema_meta.get("errors", [])[:5]),
             "parse",
+            codes=schema_meta.get("error_codes") or [],
         )
     compiled = compile_intent_schema(schema)
     # 只校验步骤契约：完整 rule 尚未组装，validate_rule 会误报 source/version 缺失
@@ -1147,7 +1148,7 @@ def generate_rules_from_schema(
 # ------------------------------------------------------------
 # 自然语言 -> 规则
 # ------------------------------------------------------------
-def generate_rules(
+def generate_rules_legacy(
     intent: str,
     source: Dict[str, Any],
     columns: Optional[List[str]] = None,
@@ -1156,12 +1157,10 @@ def generate_rules(
     source_columns: Optional[Dict[str, List[str]]] = None,
     column_aliases: Any = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """生成并校验规则，返回 (rule, meta)。
+    """兼容链路：模型直接输出规则 JSON + 中文正则意图编译。
 
-    输入：自然语言 intent、主数据源 source、可用列名 columns、可选多源 sources，
-    以及使用者提供的 ``column_aliases``（描述 → 真实列名，支持 dict 或多行文本）。
-    输出：符合契约的规则 JSON；meta 含 provider 状态、耗时与列映射提示。
-    失败时抛出 LLMError（不再降级到关键词模板）；离线执行请使用显式规则 JSON。
+    主路径已迁移到 :func:`generate_rules_from_schema`。本函数仅用于显式指定
+    ``generation_path='legacy'`` 的诊断/回归场景，不再作为默认入口。
     """
     if not columns:
         try:
@@ -1392,6 +1391,35 @@ def generate_rules(
     return rule, meta
 
 
+def generate_rules(
+    intent: str,
+    source: Dict[str, Any],
+    columns: Optional[List[str]] = None,
+    provider: Optional[LLMProvider] = None,
+    sources: Optional[Dict[str, Any]] = None,
+    source_columns: Optional[Dict[str, List[str]]] = None,
+    column_aliases: Any = None,
+    generation_path: str = "schema",
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """描述 → 规则的主入口。
+
+    默认走结构化意图 Schema（真实 LLM 解析 → 结构校验 → 确定性编译 → 语义复评），
+    规则中不依赖中文正则猜测业务口径。``generation_path='legacy'`` 仅供回归诊断，
+    对应旧版“模型直接输出规则 JSON + 正则意图编译”链路。
+    """
+    if generation_path == "schema":
+        return generate_rules_from_schema(
+            intent, source, columns, provider=provider, sources=sources,
+            source_columns=source_columns, column_aliases=column_aliases,
+        )
+    if generation_path == "legacy":
+        return generate_rules_legacy(
+            intent, source, columns, provider=provider, sources=sources,
+            source_columns=source_columns, column_aliases=column_aliases,
+        )
+    raise ValueError(f"未知 generation_path: {generation_path!r}；可选 schema/legacy")
+
+
 def generate_rules_from_dict(
     payload: Dict[str, Any], provider: Optional[LLMProvider] = None
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -1425,6 +1453,7 @@ def generate_rules_from_dict(
         intent, source, columns, provider,
         sources=sources, source_columns=source_columns,
         column_aliases=payload.get("column_aliases"),
+        generation_path=str(payload.get("generation_path") or "schema"),
     )
 
 

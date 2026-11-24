@@ -1216,7 +1216,7 @@ def run_pipeline(config: PipelineConfig) -> str:
 # ============================================================
 # 9. 扩展子命令（前缀分派，旧调用形式 100% 保持）
 # ============================================================
-_SUBCOMMANDS = ("nl", "extract", "web", "llm-check", "rules", "cleanup")
+_SUBCOMMANDS = ("nl", "extract", "web", "llm-check", "rules", "cleanup", "showcase")
 
 
 def _cmd_nl(argv: List[str]) -> int:
@@ -1239,6 +1239,8 @@ def _cmd_nl(argv: List[str]) -> int:
     p.add_argument("--save-rule", default="", metavar="NAME",
                    help="把本次规则保存到规则库，后续可用 --rule NAME 复用")
     p.add_argument("--rules-only", action="store_true", help="只生成并打印规则，不执行")
+    p.add_argument("--generation-path", default="schema", choices=["schema", "legacy"],
+                   help="生成链路：schema 为默认主路径；legacy 仅供回归诊断")
     p.add_argument("--log-level", default="INFO",
                    choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="日志级别")
     a = p.parse_args(argv)
@@ -1269,7 +1271,9 @@ def _cmd_nl(argv: List[str]) -> int:
                 from rules import probe_columns
 
                 columns = probe_columns(source)
-            rule, meta = generate_rules(intent, source, columns)
+            rule, meta = generate_rules(
+                intent, source, columns, generation_path=a.generation_path
+            )
     except Exception as exc:  # noqa: BLE001
         LOGGER.error("规则生成失败: %s", exc)
         return 1
@@ -1474,6 +1478,25 @@ def _cmd_rules(argv: List[str]) -> int:
         return 1
 
 
+def _cmd_showcase(argv: List[str]) -> int:
+    """生成场景化展示模板样例 HTML（演示 / 汇报 / 使用说明）。"""
+    import argparse as _ap
+
+    p = _ap.ArgumentParser(
+        prog="etl_pipeline.py showcase",
+        description="生成场景化展示模板样例 HTML（离线自包含单页）",
+    )
+    p.add_argument("--output-dir", default="output/showcase", help="输出目录")
+    a = p.parse_args(argv)
+    try:
+        from display_showcase import main as showcase_main
+
+        return showcase_main(["--output-dir", a.output_dir])
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.error("展示样例生成失败: %s: %s", type(exc).__name__, exc)
+        return 1
+
+
 def _cmd_llm_check(argv: List[str]) -> int:
     """打印 LLM 配置诊断；输出绝不包含 API Key 的值。"""
     import argparse as _ap
@@ -1505,6 +1528,8 @@ def _dispatch_subcommand(argv_list: List[str]) -> Optional[int]:
         return _cmd_extract(rest)
     if cmd == "llm-check":
         return _cmd_llm_check(rest)
+    if cmd == "showcase":
+        return _cmd_showcase(rest)
     if cmd == "rules":
         return _cmd_rules(rest)
     if cmd == "cleanup":

@@ -147,10 +147,9 @@ def _run_generation_gate(
 ):
     """走 /plan 全链路，返回 (reply, provider, captured_meta)。
 
-    ``_spy`` 是透明观察器：调用真实 ``rules.generate_rules`` 并记录其 meta。
-    webapp 内部 ``from rules import generate_rules`` 在函数体内执行，会取到
-    这里替换的 spy，而 spy 又委托给替换前保存的真实函数，因此
-    validate_rule / evaluate_rule / apply_intent_plan 全程真实运行。
+    ``_spy`` 是透明观察器：调用真实 ``rules.generate_rules_legacy`` 并记录 meta。
+    本用例验证旧规则 DSL 的 JSON 修复/语义回灌链路，因此显式指定
+    ``generation_path=legacy``；默认主路径为结构化意图 Schema。
     """
     csv_path = _write_csv(tmp_path / f"{case}.csv", columns, rows)
     state = webapp.AppState(str(tmp_path / f"out_{case}"))
@@ -162,7 +161,7 @@ def _run_generation_gate(
     patch_provider(monkeypatch, provider)
 
     captured: Dict[str, Any] = {}
-    real_generate = rules.generate_rules
+    real_generate = rules.generate_rules_legacy
 
     def _spy(*args, **kwargs):
         rule, meta = real_generate(*args, **kwargs)
@@ -170,7 +169,7 @@ def _run_generation_gate(
         captured["meta"] = meta
         return rule, meta
 
-    monkeypatch.setattr(rules, "generate_rules", _spy)
+    monkeypatch.setattr(rules, "generate_rules_legacy", _spy)
 
     reply = webapp.handle_request("POST", "/plan", {}, {
         "intent": [intent],
@@ -179,6 +178,7 @@ def _run_generation_gate(
         "columns": [",".join(columns)],
         "formats": ["csv"],
         "report": ["1"],
+        "generation_path": ["legacy"],
     }, state)
     return reply, provider, captured
 

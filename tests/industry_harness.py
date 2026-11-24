@@ -64,6 +64,7 @@ def _form(ctx: ScenarioContext) -> Dict[str, List[str]]:
         "column_aliases": ["\n".join(f"{k}={v}" for k, v in ctx.aliases.items())],
         "formats": ["csv"],
         "report": ["1"],
+        "generation_path": ["legacy"],
     }
     for idx, (alias, src) in enumerate(ctx.extra_sources.items(), 1):
         form[f"extra{idx}_alias"] = [alias]
@@ -137,7 +138,7 @@ def run_scenario(ctx: ScenarioContext, out_dir: Path) -> Dict[str, Any]:
 def generation_check(ctx: ScenarioContext) -> Dict[str, Any]:
     """单独验证「描述 → LLM 响应解析 → 语义自检/修复 → 规则」链路。"""
     provider = provider_for(ctx)
-    rule, meta = rules.generate_rules(
+    rule, meta = rules.generate_rules_legacy(
         ctx.scenario.intent, ctx.source, ctx.columns,
         provider=provider,
         sources=ctx.extra_sources or None,

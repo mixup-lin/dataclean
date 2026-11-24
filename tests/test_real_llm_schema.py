@@ -193,7 +193,7 @@ def test_schema_validation_is_deterministic_not_text_regex() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 前端全链路：/plan(schema_mode=1) → /execute → /result
+# 前端全链路：/plan（默认 Schema 主路径）→ /execute → /result
 # ---------------------------------------------------------------------------
 def test_real_llm_plan_execute_result_chain(tmp_path: Path) -> None:
     path = _write_csv(tmp_path / "in.csv")
@@ -203,7 +203,6 @@ def test_real_llm_plan_execute_result_chain(tmp_path: Path) -> None:
         "intent": [intent],
         "source_path": [str(path)], "source_format": ["csv"],
         "columns": [",".join(COLS)], "formats": ["csv"], "report": ["1"],
-        "schema_mode": ["1"],
     }, state)
     assert plan.status == 200, plan.body[:800]
     match = re.search(
@@ -215,7 +214,9 @@ def test_real_llm_plan_execute_result_chain(tmp_path: Path) -> None:
     rule = json.loads(_html.unescape(match.group(1)))
     assert [s.get("op") for s in rule["steps"]][:3] == ["dedupe", "filter", "expr"]
     assert any(s.get("op") == "date_filter" and s.get("year") == 2026 for s in rule["steps"])
-    assert "结构化意图" in plan.body or "intent_schema" in plan.body
+    assert "schema-panel" in plan.body, plan.body[:1200]
+    assert 'name="schema_mode"' not in plan.body
+    assert any(kind in plan.body for kind in ("dedupe", "date_filter", "aggregate"))
 
     execute = webapp.handle_request("POST", "/execute", {}, {
         "rule_json": [json.dumps(rule, ensure_ascii=False)],

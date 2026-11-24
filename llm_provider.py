@@ -34,7 +34,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Sequence, Set, Tuple
 
 LOGGER = logging.getLogger("etl")
 
@@ -50,9 +50,12 @@ except ImportError:  # pragma: no cover - 取决于运行环境
 class LLMError(RuntimeError):
     """LLM 调用失败的统一异常，kind 便于上层决定重试或报错策略。"""
 
-    def __init__(self, message: str, kind: str = "unknown") -> None:
+    def __init__(self, message: str, kind: str = "unknown",
+                 codes: Optional[Sequence[str]] = None) -> None:
         super().__init__(message)
         self.kind = kind
+        # 结构化失败码：调用方据此判断拒绝类型，无需解析中文错误文本。
+        self.codes: List[str] = [str(c) for c in (codes or [])]
 
 
 # ============================================================

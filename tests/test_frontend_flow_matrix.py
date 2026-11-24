@@ -100,6 +100,7 @@ def _post_plan(
             "column_aliases": [alias_text],
             "formats": ["csv"],
             "report": ["1"],
+            "generation_path": ["legacy"],
         }
         return webapp.handle_request("POST", endpoint, {}, form, state)
     finally:

@@ -7,8 +7,9 @@
 1. 在线生成后的语义自检：发现问题立刻带 code 回灌模型定点修复；
 2. 场景矩阵的准确率度量：统计「生成即正确」的比例。
 
-评测口径与 ``ops.prompt_kit`` 的任务族骨架一一对应，避免提示词说一套、
-评测用另一套。
+带 ``intent_schema`` 的规则（默认主路径）走 ``_evaluate_schema_rule``：
+重新编译 Schema 并逐项核对，不做任何中文关键词判断。无 Schema 的历史规则
+仍使用原有中文守门逻辑，仅作为兼容路径。
 """
 from __future__ import annotations
 
@@ -57,7 +58,8 @@ BLOCKING_CODES: frozenset = frozenset({
     "missing_date_filter", "date_in_filter", "date_range_in_filter",
     "date_eq_year", "contradictory_filter", "wrong_task_type",
     "avg_ratio_missing", "cross_year_bucket", "dedupe_after_filter",
-    "avg_ratio_null_pair_missing",
+    "avg_ratio_null_pair_missing", "schema_steps_mismatch",
+    "schema_task_type_mismatch", "schema_invalid",
 })
 
 
@@ -191,9 +193,120 @@ def _year_requested(intent: str) -> bool:
     ))
 
 
+def _evaluate_schema_rule(rule: Dict[str, Any], columns: Sequence[str]) -> List[Issue]:
+    """结构化语义复评：只读 Schema 字段与规则结构，不解析任何中文文本。
+
+    内嵌 ``intent_schema`` 的规则由确定性编译器产出；复评时重新编译并逐项核对，
+    再补一组纯结构守卫（列引用、条件互斥、比值分母对齐）。旧链路的中文正则
+    判定仅保留给没有 Schema 的兼容规则。
+    """
+    from ops.intent_schema import compile_schema, validate_schema
+
+    issues: List[Issue] = []
+    schema = rule.get("intent_schema")
+    result = validate_schema(schema, columns)
+    if not result.ok:
+        return [Issue("schema_invalid", "规则内嵌意图 Schema 复检失败")]
+    compiled = compile_schema(result)
+    steps = _steps(rule)
+    if rule.get("steps") != compiled.steps:
+        issues.append(Issue(
+            "schema_steps_mismatch", "规则步骤与 Schema 确定性编译结果不一致"
+        ))
+    if str(rule.get("task_type") or "") != compiled.task_type:
+        issues.append(Issue(
+            "schema_task_type_mismatch",
+            f"task_type 应为 {compiled.task_type!r}，实际为 {rule.get('task_type')!r}",
+        ))
+
+    known = {str(c) for c in columns}
+    produced = _produced_names(steps, columns)
+    for column in sorted(_column_refs(steps, produced)):
+        if column != "*" and column not in known:
+            issues.append(Issue("unknown_column", f"列 {column!r} 不在真实列清单中"))
+
+    eq_values: Dict[str, Set[str]] = {}
+    null_ops: Dict[str, Set[str]] = {}
+    for cond in _walk_conditions(steps):
+        col = cond.get("column")
+        operator = str(cond.get("operator", "")).lower()
+        if isinstance(col, str) and operator in ("eq", "==", "=") and "value" in cond:
+            eq_values.setdefault(col, set()).add(str(cond["value"]))
+        if isinstance(col, str) and operator in {"isna", "notna"}:
+            null_ops.setdefault(col, set()).add(operator)
+    for col, values in eq_values.items():
+        if len(values) > 1:
+            issues.append(Issue("contradictory_filter", f"列 {col!r} 被筛成多个互斥取值"))
+    for col, operators in null_ops.items():
+        if len(operators) > 1:
+            issues.append(Issue("contradictory_filter", f"列 {col!r} 同时被 isna 和 notna 筛选"))
+
+    for step in steps:
+        if step.get("op") != "filter":
+            continue
+        for cond in (step.get("conditions") or []):
+            if isinstance(cond, dict) and str(cond.get("op", "")) == "date_filter":
+                issues.append(Issue(
+                    "date_filter_nested", "date_filter 必须是独立步骤，不能塞进 filter.conditions"
+                ))
+        for cond in _walk_conditions([step]):
+            if str(cond.get("op", "")) == "date_filter":
+                issues.append(Issue(
+                    "date_filter_nested", "date_filter 必须是独立步骤，不能塞进 filter.conditions"
+                ))
+    rate_columns = {
+        str(s.get("column")) for s in steps
+        if s.get("op") == "rate" and isinstance(s.get("column"), str)
+    }
+    for step in steps:
+        if step.get("op") != "filter":
+            continue
+        for cond in _walk_conditions([step]):
+            if (str(cond.get("column")) in rate_columns
+                    and str(cond.get("operator", "")).lower() in ("isna", "notna")):
+                issues.append(Issue(
+                    "judge_in_filter", f"判据列 {cond.get('column')!r} 的判空条件不能写进 filter"
+                ))
+
+    # 比值型指标：分子分母必须成对 notna，避免空分子稀释 Σ分母。
+    ratios = [
+        (str(m.get("numerator")), str(m.get("denominator")))
+        for op in (result.payload.get("operations") or [])
+        if isinstance(op, dict) and op.get("kind") == "aggregate"
+        for m in (op.get("metrics") or [])
+        if isinstance(m, dict) and m.get("kind") == "ratio"
+    ]
+    for numerator, denominator in ratios:
+        paired = any(
+            {numerator, denominator} <= {
+                str(cond.get("column")) for cond in _walk_conditions([step])
+                if str(cond.get("operator", "")).lower() == "notna" and cond.get("column")
+            }
+            for step in steps if step.get("op") == "filter"
+        )
+        if not paired:
+            issues.append(Issue(
+                "avg_ratio_null_pair_missing",
+                f"比值指标 {numerator}/{denominator} 缺少成对 notna 过滤",
+            ))
+    return issues
+
+
 def evaluate_rule(rule: Any, intent: str, columns: Sequence[str],
                   aliases: Optional[Dict[str, str]] = None) -> List[Issue]:
-    """返回语义问题列表；空列表视为「生成即正确」。"""
+    """返回语义问题列表；空列表视为「生成即正确」。
+
+    带 ``intent_schema`` 的规则走纯结构化复评；旧规则保留中文语义守门，
+    仅作为兼容路径使用，不再参与主链路判定。
+    """
+    if isinstance(rule, dict) and isinstance(rule.get("intent_schema"), dict):
+        return _evaluate_schema_rule(rule, columns)
+    return _evaluate_legacy_rule(rule, intent, columns, aliases)
+
+
+def _evaluate_legacy_rule(rule: Any, intent: str, columns: Sequence[str],
+                          aliases: Optional[Dict[str, str]] = None) -> List[Issue]:
+    """兼容链路的中文语义守门；新规则不应依赖此路径。"""
     issues: List[Issue] = []
     if not isinstance(rule, dict):
         return [Issue("not_object", "规则必须是 JSON 对象")]

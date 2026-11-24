@@ -18,8 +18,6 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import rules
 from llm_provider import describe_provider, get_provider, load_dotenv
-from ops.errors import RuleValidationError
-from ops.rule_eval import format_issues
 
 load_dotenv()
 
@@ -71,10 +69,6 @@ def _has_condition(rule: Dict[str, Any], column: str, operator: str,
             if value == "__any__" or str(cond.get("value")) == str(value):
                 return True
     return False
-
-
-def _contains_fragment(values: Sequence[Any], fragment: str) -> bool:
-    return any(fragment in str(v) for v in values)
 
 
 def check_expectation(rule: Dict[str, Any], expect: Dict[str, Any]) -> List[str]:
@@ -146,9 +140,10 @@ def check_expectation(rule: Dict[str, Any], expect: Dict[str, Any]) -> List[str]
             ok = set(want.get("by") or []).issubset(by)
             for func in want.get("funcs") or []:
                 ok = ok and (func in funcs)
-            aliases = [str(a) for a in step.get("alias") or []]
+            # 结构化断言：别名必须完整相等，不做中文子串/关键词猜测。
+            aliases = {str(a) for a in step.get("alias") or []}
             for alias in want.get("aliases") or []:
-                ok = ok and _contains_fragment(aliases, alias)
+                ok = ok and str(alias) in aliases
             if ok:
                 matched = True
                 break
@@ -331,14 +326,16 @@ def evaluate_case(provider: Any, case: Case) -> Dict[str, Any]:
         )
     except Exception as exc:  # noqa: BLE001 - 评测器需要记录所有失败形态
         message = f"{type(exc).__name__}: {exc}"
-        rejected = case.expected_reject and any(
-            token in message for token in ("未知列", "无法映射", "Schema 校验", "解析失败")
+        # 只依据结构化错误码判定「被正确拒绝」，不再扫描中文错误文本。
+        error_codes = [str(c) for c in (getattr(exc, "codes", None) or [])]
+        rejected = case.expected_reject and bool(
+            set(error_codes) & {"unknown_column", "unresolved_columns"}
         )
         record.update({
             "parse_ok": False, "rule_valid": False, "semantic_ok": False,
             "expectation_ok": rejected,
             "correct": rejected,
-            "attempts": 0, "error": message,
+            "attempts": 0, "error": message, "error_codes": error_codes,
             "elapsed": round(time.monotonic() - started, 3),
         })
         return record

@@ -33,6 +33,12 @@ _doc_samples/
 
 # 注意：rules/ 是用户保存的规则库，属于有意保留的资产，请勿忽略。
 
+# 前端构建依赖（构建期使用，产物已落到 static/vendor，运行时无需 node_modules）
+webui/node_modules/
+
 # 虚拟环境
 .venv/
 venv/
+
+# 测试文档
+Python数据处理自动化脚本.md 
