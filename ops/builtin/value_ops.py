@@ -14,6 +14,7 @@ from ops.constants import (
     BIN_METHODS, CAST_TYPES, DATE_PARTS, DATE_PART_LABELS, DERIVE_OPERATORS,
     FILL_METHODS, RANK_METHODS, STRING_ACTIONS, as_list,
 )
+from ops.datetime_utils import to_datetime_series
 from ops.errors import RuleValidationError
 from ops.primitives import as_cols, existing_cols, finite, numeric, require_columns
 from ops.registry import OpSpec, ParamSpec, register_op
@@ -210,7 +211,7 @@ def _bucket_series(dt: pd.Series, parts: Sequence[str]) -> Optional[pd.Series]:
 def apply_date_part(df, step, frames=None, ctx=None):
     column = str(step.get("column"))
     require_columns(df, [column], "date_part")
-    dt = pd.to_datetime(df[column], errors="coerce", format="mixed")
+    dt = to_datetime_series(df[column])
     frame = df.copy()
     made: List[str] = []
     parts = [str(p) for p in as_cols(step.get("parts"))]

@@ -34,6 +34,7 @@ import logging
 import re
 import sqlite3
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -140,6 +141,32 @@ def setup_logging(level: str = "INFO", log_file: Optional[str] = None) -> None:
 # ============================================================
 # 3. 多数据源读取
 # ============================================================
+def _quote_sqlite_identifier(name: str) -> str:
+    """把表名安全包成 SQLite 标识符，避免配置里的引号改变 SQL 结构。"""
+    return '"' + str(name or "data").replace('"', '""') + '"'
+
+
+@contextmanager
+def sqlite_readonly_connection(path: str):
+    """只读 SQLite 连接：即使配置了写语句，也无法改动数据库文件。"""
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute("PRAGMA query_only = ON")
+        yield conn
+    finally:
+        conn.close()
+
+
+def sqlite_select_sql(config: "PipelineConfig", limit: Optional[int] = None) -> str:
+    """统一构造读取 SQL；自定义 query 优先，表名按标识符安全转义。"""
+    if config.sqlite_query and str(config.sqlite_query).strip():
+        return str(config.sqlite_query).strip()
+    sql = f"SELECT * FROM {_quote_sqlite_identifier(config.sqlite_table)}"
+    if limit is not None:
+        sql += f" LIMIT {int(limit)}"
+    return sql
+
+
 def read_data(config: PipelineConfig) -> pd.DataFrame:
     """依配置的输入格式分派到对应读取器，并统一捕获常见异常。"""
     LOGGER.info("开始读取数据源: %s (格式=%s)", config.input_path, config.input_format)
@@ -188,9 +215,8 @@ def _read_excel(config: PipelineConfig) -> pd.DataFrame:
 
 
 def _read_sqlite(config: PipelineConfig) -> pd.DataFrame:
-    query = config.sqlite_query or f"SELECT * FROM {config.sqlite_table}"
-    with sqlite3.connect(config.input_path) as conn:
-        return pd.read_sql_query(query, conn)
+    with sqlite_readonly_connection(config.input_path) as conn:
+        return pd.read_sql_query(sqlite_select_sql(config), conn)
 
 
 # ============================================================

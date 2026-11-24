@@ -1088,6 +1088,11 @@ def generate_rules_from_schema(
         except Exception:  # noqa: BLE001
             columns = []
     columns = [str(c) for c in columns]
+    # 关联后的派生/维表列也属于真实列；Schema 校验与步骤校验都要认得，
+    # 否则「关联维表后按片区统计」会被误判为臆造列。
+    all_columns = list(dict.fromkeys(
+        columns + [str(c) for cols in (source_columns or {}).values() for c in cols]
+    ))
     p = provider or get_provider()
     info = describe_provider(p)
     alias_map, alias_warnings = parse_column_aliases(column_aliases, columns)
@@ -1102,7 +1107,7 @@ def generate_rules_from_schema(
         )
     compiled = compile_intent_schema(schema)
     # 只校验步骤契约：完整 rule 尚未组装，validate_rule 会误报 source/version 缺失
-    errors = _validate_steps(compiled.steps, columns)
+    errors = _validate_steps(compiled.steps, all_columns)
     if errors:
         raise RuleValidationError(errors)
     rule: Dict[str, Any] = {
@@ -1120,7 +1125,7 @@ def generate_rules_from_schema(
         cleaned = {str(k): dict(v) for k, v in sources.items() if isinstance(v, dict)}
         cleaned.setdefault("main", dict(source))
         rule["sources"] = cleaned
-    issues = evaluate_rule(rule, intent, columns, alias_map)
+    issues = evaluate_rule(rule, intent, all_columns, alias_map)
     meta: Dict[str, Any] = {
         "provider": info.name,
         "mode": info.mode,
@@ -1523,9 +1528,10 @@ def probe_value_hints(
         elif fmt == "json":
             df = pd.read_json(cfg.input_path, encoding=cfg.encoding).head(rows)
         else:
-            import sqlite3
-            query = cfg.sqlite_query or f"SELECT * FROM {cfg.sqlite_table} LIMIT {rows}"
-            with sqlite3.connect(cfg.input_path) as conn:
+            from etl_pipeline import sqlite_readonly_connection, sqlite_select_sql
+
+            query = sqlite_select_sql(cfg, limit=rows)
+            with sqlite_readonly_connection(cfg.input_path) as conn:
                 df = pd.read_sql_query(query, conn).head(rows)
         wanted = set(columns or [str(c) for c in df.columns])
         for col in df.columns:
@@ -1541,8 +1547,14 @@ def probe_value_hints(
     return hints
 
 
-def probe_columns(source: Dict[str, Any], limit: int = 200) -> List[str]:
-    """轻量探测数据源列名，供规则校验与 Web 展示（只读表头，不载入全量）。"""
+def probe_columns(
+    source: Dict[str, Any], limit: int = 200, strict: bool = False
+) -> List[str]:
+    """轻量探测数据源列名，供规则校验与 Web 展示（只读表头，不载入全量）。
+
+    ``strict=True`` 时不再吞掉错误，供 Web 在生成规则前明确提示
+    「SQLite 表名 / 查询无效」，避免带着空列清单继续生成错误规则。
+    """
     try:
         import pandas as pd
         from etl_pipeline import PipelineConfig
@@ -1572,13 +1584,16 @@ def probe_columns(source: Dict[str, Any], limit: int = 200) -> List[str]:
         elif fmt == "json":
             df = pd.read_json(cfg.input_path, nrows=5, encoding=cfg.encoding)
         else:
-            import sqlite3
-            query = cfg.sqlite_query or f"SELECT * FROM {cfg.sqlite_table} LIMIT 5"
-            with sqlite3.connect(cfg.input_path) as conn:
+            from etl_pipeline import sqlite_readonly_connection, sqlite_select_sql
+
+            query = sqlite_select_sql(cfg, limit=5)
+            with sqlite_readonly_connection(cfg.input_path) as conn:
                 df = pd.read_sql_query(query, conn)
         return [str(c) for c in df.columns][:limit]
     except Exception as exc:  # noqa: BLE001 - 探测失败不应阻断规则生成
         LOGGER.warning("列名探测失败（将跳过列引用校验）：%s", type(exc).__name__)
+        if strict:
+            raise
         return []
 
 

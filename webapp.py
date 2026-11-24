@@ -389,6 +389,19 @@ def _collect_sources(
     from rules import RuleValidationError
 
     errors: List[str] = []
+
+    def with_sqlite_options(src: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
+        """把表单里的 SQLite 表名 / 只读查询带入数据源代码（仅 SQLite 生效）。"""
+        if str(src.get("format") or "").lower() != "sqlite":
+            return src
+        query = _form_value(form, f"{prefix}sqlite_query", "").strip()
+        table = _form_value(form, f"{prefix}sqlite_table", "data").strip() or "data"
+        if query:
+            src["sqlite_query"] = query
+        else:
+            src["sqlite_table"] = table
+        return src
+
     main_upload = None
     try:
         main_upload = _pick_upload(files, "source_file")
@@ -401,6 +414,7 @@ def _collect_sources(
         }
     else:
         main = {"path": main_path, "format": _form_value(form, "source_format", "csv")}
+    main = with_sqlite_options(main)
     if not main.get("path"):
         errors.append("主数据源路径不能为空")
 
@@ -430,6 +444,7 @@ def _collect_sources(
         else:
             errors.append(f"附加表 {alias} 需要上传文件或填写路径")
             continue
+        src = with_sqlite_options(src, f"extra{i}_")
         key = _form_value(form, f"extra{i}_key").strip()
         right_key = _form_value(form, f"extra{i}_right_key").strip()
         how = _form_value(form, f"extra{i}_how", "left")
@@ -546,13 +561,15 @@ def _extra_values(sources: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
             "alias": str(alias),
             "path": str(item.get("path") or ""),
             "format": str(item.get("format") or "csv"),
+            "sqlite_table": str(item.get("sqlite_table") or "data"),
+            "sqlite_query": str(item.get("sqlite_query") or ""),
             "key": str(item.get("left_on") or ""),
             "right_key": str(item.get("right_on") or ""),
             "how": str(item.get("how") or "left"),
         })
     while len(extras) < 2:
-        extras.append({"alias": "", "path": "", "format": "csv", "key": "",
-                       "right_key": "", "how": "left"})
+        extras.append({"alias": "", "path": "", "format": "csv", "sqlite_table": "data",
+                       "sqlite_query": "", "key": "", "right_key": "", "how": "left"})
     return extras[:2]
 
 
@@ -714,6 +731,8 @@ def _workbench(
     rule_input_json: str = "",
     rule_name: str = "",
     saved_rule_id: str = "",
+    sqlite_table: str = "data",
+    sqlite_query: str = "",
 ) -> Reply:
     v = _view_params(query)
     err_html = ""
@@ -764,6 +783,8 @@ def _workbench(
     if isinstance(main_src, dict) and main_src.get("path"):
         source_path = str(main_src["path"])
         source_format = str(main_src.get("format") or source_format)
+        sqlite_table = str(main_src.get("sqlite_table") or sqlite_table)
+        sqlite_query = str(main_src.get("sqlite_query") or sqlite_query)
     extras = _extra_values(sources)
     hinted: List[str] = []
     if source_path.strip():
@@ -781,6 +802,7 @@ def _workbench(
         BODY_CLASS=_body_class(v), NAV=_nav("workbench"),
         INTENT=_esc(intent), SOURCE_PATH=_esc(source_path),
         SOURCE_FORMAT_OPTIONS=_format_options(source_format),
+        SQLITE_TABLE=_esc(sqlite_table), SQLITE_QUERY=_esc(sqlite_query),
         COLUMNS=_esc(columns), EXAMPLES=_task_chips(intent),
         COLUMN_ALIASES=_esc(column_aliases),
         RULE_NAME=_esc(rule_name), SAVED_RULE_OPTIONS=saved_options,
@@ -795,12 +817,16 @@ def _workbench(
         EXTRA1_OPEN="open" if extras[0]["alias"] else "",
         EXTRA1_ALIAS=_esc(extras[0]["alias"]), EXTRA1_PATH=_esc(extras[0]["path"]),
         EXTRA1_FORMAT_OPTIONS=_format_options(extras[0]["format"], "extra1_format"),
+        EXTRA1_SQLITE_TABLE=_esc(extras[0]["sqlite_table"]),
+        EXTRA1_SQLITE_QUERY=_esc(extras[0]["sqlite_query"]),
         EXTRA1_KEY=_esc(extras[0]["key"]),
         EXTRA1_RIGHT_KEY=_esc(extras[0]["right_key"]),
         EXTRA1_HOW_OPTIONS=_how_options(extras[0]["how"]),
         EXTRA2_OPEN="open" if extras[1]["alias"] else "",
         EXTRA2_ALIAS=_esc(extras[1]["alias"]), EXTRA2_PATH=_esc(extras[1]["path"]),
         EXTRA2_FORMAT_OPTIONS=_format_options(extras[1]["format"], "extra2_format"),
+        EXTRA2_SQLITE_TABLE=_esc(extras[1]["sqlite_table"]),
+        EXTRA2_SQLITE_QUERY=_esc(extras[1]["sqlite_query"]),
         EXTRA2_KEY=_esc(extras[1]["key"]),
         EXTRA2_RIGHT_KEY=_esc(extras[1]["right_key"]),
         EXTRA2_HOW_OPTIONS=_how_options(extras[1]["how"]),
@@ -1712,6 +1738,8 @@ def handle_request(
         intent = _form_value(form, "intent").strip()
         source_path = _form_value(form, "source_path", "lots.csv").strip()
         source_format = _form_value(form, "source_format", "csv")
+        sqlite_table = _form_value(form, "sqlite_table", "data").strip() or "data"
+        sqlite_query = _form_value(form, "sqlite_query", "").strip()
         columns = _form_value(form, "columns").strip()
         alias_text = _form_value(form, "column_aliases").strip()
         rule_input = _form_value(form, "rule_json").strip()
@@ -1724,6 +1752,7 @@ def handle_request(
             return _workbench(
                 query, state.base_output, errors=["需求描述不能为空"],
                 source_path=source_path, source_format=source_format,
+                sqlite_table=sqlite_table, sqlite_query=sqlite_query,
                 column_aliases=alias_text,
             )
         sources: Dict[str, Any] = {}
@@ -1734,6 +1763,11 @@ def handle_request(
 
             sources = _collect_sources(form, files)
             source = sources["main"]
+            # SQLite 的表名/查询错误必须在生成规则前明确暴露；其余格式
+            # 仍沿用「探测失败只跳过列校验」的宽松策略。
+            for alias, src in sources.items():
+                if str(src.get("format") or "").lower() == "sqlite":
+                    probe_columns(src, strict=True)
             cols = [c.strip() for c in columns.split(",") if c.strip()]
             if not cols:
                 cols = probe_columns(source)
@@ -1801,6 +1835,7 @@ def handle_request(
                 return _workbench(
                     query, state.base_output, intent=intent,
                     source_path=source_path, source_format=source_format,
+                sqlite_table=sqlite_table, sqlite_query=sqlite_query,
                     columns=columns, formats=formats, errors=errs,
                     sources=sources, column_aliases=alias_text,
                     rule_input_json=rule_input,
@@ -1811,6 +1846,7 @@ def handle_request(
             return _workbench(
                 query, state.base_output, intent=intent,
                 source_path=source_path, source_format=source_format,
+                sqlite_table=sqlite_table, sqlite_query=sqlite_query,
                 columns=columns, formats=formats, errors=[str(exc)],
                 sources=sources, column_aliases=alias_text,
                 rule_input_json=rule_input,
@@ -1819,6 +1855,7 @@ def handle_request(
             return _workbench(
                 query, state.base_output, intent=intent,
                 source_path=source_path, source_format=source_format,
+                sqlite_table=sqlite_table, sqlite_query=sqlite_query,
                 columns=columns, formats=formats, rule=rule, meta=meta,
                 sources=sources, column_aliases=alias_text,
                 rule_input_json=rule_input,
@@ -1839,6 +1876,7 @@ def handle_request(
             return _workbench(
                 query, state.base_output, intent=intent,
                 source_path=source_path, source_format=source_format,
+                sqlite_table=sqlite_table, sqlite_query=sqlite_query,
                 columns=columns, formats=formats, rule=rule, meta=meta,
                 errors=[f"执行失败：{exc}"], column_aliases=alias_text,
             )

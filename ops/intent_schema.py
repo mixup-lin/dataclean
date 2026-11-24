@@ -48,6 +48,12 @@ OP_SPEC: Dict[str, Dict[str, Any]] = {
         "fields": {"keys": "列名数组；为空表示整行去重", "keep": "first|last|all"},
         "required": [],
     },
+    "join": {
+        "desc": "按别名关联附加数据源（维表）；right 必须是 sources 中的别名",
+        "fields": {"right": "附加表别名", "how": "left|inner|right|outer",
+                   "left_on": "主表关联键数组", "right_on": "附加表关联键数组；缺省同 left_on"},
+        "required": ["right", "left_on"],
+    },
     "filter": {
         "desc": "按条件筛选行；多个条件用 logic 组合",
         "fields": {
@@ -125,7 +131,8 @@ OP_SPEC: Dict[str, Dict[str, Any]] = {
 }
 
 _COLUMN_FIELDS = {
-    "dedupe": ("keys",), "filter": ("conditions",), "fill": ("columns",),
+    "dedupe": ("keys",), "join": ("left_on", "right_on"),
+    "filter": ("conditions",), "fill": ("columns",),
     "outlier": ("column",), "formula": ("operands",), "date_filter": ("column",),
     "date_part": ("column",), "dropna": ("columns",), "aggregate": ("by", "metrics"),
     "count": ("by",), "rate": ("column", "by"), "sort": ("by",), "select": ("columns",),
@@ -198,6 +205,7 @@ def validate_schema(
     payload: Any,
     columns: Sequence[str],
     aliases: Optional[Dict[str, str]] = None,
+    source_names: Optional[Sequence[str]] = None,
 ) -> SchemaResult:
     """校验 LLM 输出的意图 Schema；返回归一化的 SchemaResult（永不抛异常）。"""
     errors: List[str] = []
@@ -272,6 +280,34 @@ def validate_schema(
             if keep not in DEDUPE_KEEP:
                 errors.append(f"{tag}.keep 非法，可选 {list(DEDUPE_KEEP)}")
             op["keep"] = keep
+
+        elif kind == "join":
+            right = str(raw.get("right") or "").strip()
+            if not right:
+                errors.append(f"{tag}.right 不能为空")
+            elif source_names is not None and right not in {str(x) for x in source_names}:
+                errors.append(
+                    f"{tag}.right 引用了未声明的附加表 {right!r}；"
+                    f"可选 {[str(x) for x in source_names]}"
+                )
+                codes.append("unknown_source")
+            op["right"] = right
+            how = str(raw.get("how") or "left").strip()
+            if how not in ("left", "inner", "right", "outer"):
+                errors.append(f"{tag}.how 非法，可选 left/inner/right/outer")
+            op["how"] = how
+            left_on = _as_list(raw.get("left_on"))
+            op["left_on"] = [_resolve(k, columns, aliases, known, errors,
+                                      f"{tag}.left_on", derived)
+                             for k in left_on]
+            right_on = _as_list(raw.get("right_on")) or left_on
+            # right_on 属于附加表，列清单按主表传入，不能与主表列混用校验；
+            # 执行层会用全部数据源列做最终白名单校验。
+            op["right_on"] = [str(k).strip() for k in right_on if str(k).strip()]
+            if not op["left_on"] or not op["right_on"]:
+                errors.append(f"{tag}.left_on / right_on 不能为空")
+            elif len(op["left_on"]) != len(op["right_on"]):
+                errors.append(f"{tag}.left_on 与 right_on 数量必须一致")
 
         elif kind == "filter":
             conditions = raw.get("conditions")
@@ -522,6 +558,14 @@ def compile_schema(result: SchemaResult) -> CompileResult:
             steps.append({"op": "dedupe", "subset": list(op.get("keys") or []),
                           "keep": op.get("keep", "first")})
 
+        elif kind == "join":
+            steps.append({
+                "op": "join", "right": op["right"], "how": op.get("how", "left"),
+                "left_on": list(op.get("left_on") or []),
+                "right_on": list(op.get("right_on") or op.get("left_on") or []),
+            })
+            notes.append(f"关联附加表 {op['right']}（{op.get('how', 'left')}）")
+
         elif kind == "filter":
             steps.append({"op": "filter", "conditions": [dict(c) for c in op["conditions"]],
                           "logic": op.get("logic", "and")})
@@ -567,11 +611,18 @@ def compile_schema(result: SchemaResult) -> CompileResult:
 
         elif kind == "aggregate":
             metrics = []
+            # 已经显式给出 ratio 指标时，mean(逐行比值) 保留为对照列，
+            # 不能被同一对分子/分母再次改写成 ratio（否则逐条均值丢失）。
+            explicit_ratio_pairs = {
+                (str(m.get("numerator")), str(m.get("denominator")))
+                for m in op["metrics"] if str(m.get("kind")) == "ratio"
+            }
             for metric in op["metrics"]:
                 # 把「mean(逐行比值)」按结构关系改写为比值型指标
+                pair = division_formulas.get(str(metric.get("column")))
                 if (metric.get("kind") != "ratio" and str(metric.get("func")) == "mean"
-                        and str(metric.get("column")) in division_formulas):
-                    num, den = division_formulas[str(metric["column"])]
+                        and pair is not None and pair not in explicit_ratio_pairs):
+                    num, den = pair
                     metrics.append({
                         "kind": "ratio", "numerator": num, "denominator": den,
                         "alias": str(metric.get("alias") or metric["column"]),
@@ -910,6 +961,18 @@ _FEWSHOTS = [
             "assumptions": [],
         },
     },
+    {
+        "intent": "按小区关联维表 dim 后，统计每个片区的条数",
+        "output": {
+            "version": SCHEMA_VERSION, "task_type": "count_group",
+            "operations": [
+                {"kind": "join", "right": "dim", "how": "left",
+                 "left_on": ["小区"], "right_on": ["小区"]},
+                {"kind": "count", "by": ["片区"], "alias": "条数"},
+            ],
+            "assumptions": [],
+        },
+    },
 ]
 
 
@@ -1001,7 +1064,14 @@ def parse_intent_schema(
             last_errors = [f"LLM 响应解析失败：{str(exc)[:200]}"]
             last_codes = ["llm_parse_failed"]
         else:
-            result = validate_schema(payload, columns, aliases)
+            known_columns = list(dict.fromkeys(
+                list(columns)
+                + [str(c) for group in (source_columns or {}).values() for c in group]
+            ))
+            result = validate_schema(
+                payload, known_columns, aliases,
+                source_names=sorted(str(k) for k in (sources or {}).keys()),
+            )
             last_errors = list(result.errors)
             last_codes = list(result.error_codes)
             if result.ok:

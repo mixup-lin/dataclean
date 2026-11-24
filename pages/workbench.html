@@ -43,6 +43,12 @@
           </label>
           <label class="field"><span>主表格式</span>{{SOURCE_FORMAT_OPTIONS}}</label>
         </div>
+        <div class="row" data-dc-sqlite-options>
+          <label class="field"><span>SQLite 表名（格式选 sqlite 时生效，默认 data）</span>
+            <input type="text" name="sqlite_table" value="{{SQLITE_TABLE}}" placeholder="data"></label>
+          <label class="field"><span>SQLite 只读查询（可选，覆盖表名）</span>
+            <input type="text" name="sqlite_query" value="{{SQLITE_QUERY}}" placeholder="SELECT * FROM lots WHERE 市 = '福州'"></label>
+        </div>
         <label class="field"><span>或上传主表文件（CSV / TSV / JSON / Excel / SQLite，≤20MB）</span>
           <input type="file" name="source_file" accept=".csv,.tsv,.txt,.json,.xlsx,.xls,.db,.sqlite,.sqlite3">
         </label>
@@ -57,6 +63,12 @@
           <div class="row">
             <label class="field"><span>表路径</span><input type="text" name="extra1_path" value="{{EXTRA1_PATH}}" placeholder="communities.csv"></label>
             <label class="field"><span>格式</span>{{EXTRA1_FORMAT_OPTIONS}}</label>
+          </div>
+          <div class="row" data-dc-sqlite-options>
+            <label class="field"><span>SQLite 表名</span>
+              <input type="text" name="extra1_sqlite_table" value="{{EXTRA1_SQLITE_TABLE}}" placeholder="data"></label>
+            <label class="field"><span>SQLite 只读查询（覆盖表名）</span>
+              <input type="text" name="extra1_sqlite_query" value="{{EXTRA1_SQLITE_QUERY}}" placeholder="SELECT * FROM dim"></label>
           </div>
           <label class="field"><span>或上传文件</span>
             <input type="file" name="extra1_file" accept=".csv,.tsv,.txt,.json,.xlsx,.xls,.db,.sqlite,.sqlite3">
@@ -77,6 +89,12 @@
           <div class="row">
             <label class="field"><span>表路径</span><input type="text" name="extra2_path" value="{{EXTRA2_PATH}}" placeholder="districts.csv"></label>
             <label class="field"><span>格式</span>{{EXTRA2_FORMAT_OPTIONS}}</label>
+          </div>
+          <div class="row" data-dc-sqlite-options>
+            <label class="field"><span>SQLite 表名</span>
+              <input type="text" name="extra2_sqlite_table" value="{{EXTRA2_SQLITE_TABLE}}" placeholder="data"></label>
+            <label class="field"><span>SQLite 只读查询（覆盖表名）</span>
+              <input type="text" name="extra2_sqlite_query" value="{{EXTRA2_SQLITE_QUERY}}" placeholder="SELECT * FROM dim2"></label>
           </div>
           <label class="field"><span>或上传文件</span>
             <input type="file" name="extra2_file" accept=".csv,.tsv,.txt,.json,.xlsx,.xls,.db,.sqlite,.sqlite3">

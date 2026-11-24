@@ -27,7 +27,7 @@
 | 能力 | 说明 |
 | --- | --- |
 | **自然语言 → 规则 → 结果** | 描述需求后由真实 LLM 解析为结构化意图 Schema，确定性编译为规则 JSON，再执行；无 Key 时可用显式规则离线运行 |
-| **多数据源** | CSV / JSON（含 JSONL）/ Excel（指定 sheet）/ SQLite（自定义 SQL），支持多表 join / union 与键对齐、膨胀保护 |
+| **多数据源** | CSV / JSON（含 JSONL）/ Excel（指定 sheet）/ SQLite（表名或只读查询，Web 可指定），支持多表 join / union 与键对齐、膨胀保护 |
 | **54 个声明式算子** | 清洗、筛选、派生、聚合、占比、透视、排名、日期分桶、异常检测等，全部白名单校验、无 `eval` |
 | **任务画像 + 场景化展示** | 12 类数据处理场景映射到卡片/表格/图表/摘要，按数据类型、字段特征、结果规模、展示目标自动选模板 |
 | **自包含 HTML 报告** | 纯内联 SVG + 样式，无 JS、可离线打开与打印；含质量报告与任务报告两套视角 |
@@ -145,7 +145,7 @@ python etl_pipeline.py web --port 8765
 
 | 页面 | 路径 | 内容 |
 | --- | --- | --- |
-| 自然语言工作台 | `/` | 需求输入、任务快捷标签、主表/附加表上传、Schema 解析面板、规则库（保存/加载/删除/直接执行）、规则 JSON 编辑、执行记录 |
+| 自然语言工作台 | `/` | 需求输入、任务快捷标签、主表/附加表上传（含 SQLite 表名与只读查询）、Schema 解析面板、规则库（保存/加载/删除/直接执行）、规则 JSON 编辑、执行记录 |
 | 结果查看 | `/workbench-runs` → `/result/<run_id>` | 自动跳转到最新结果；KPI 卡、SVG 图表、结果表分页与附表切换、下载区、阶段耗时 |
 | 文档抽取 | `/extract` | 文档路径、字段 Schema、fields/tables 双视图、置信度与原文证据；可选择同步或异步 |
 | 后台任务 | `/jobs`、`/job/<id>` | 异步任务的进度页与任务列表；有活动任务时低频自动刷新，结果完成后回到常规结果页 |
@@ -241,7 +241,7 @@ flowchart LR
 
 ### 结构化意图 Schema v1.0（主路径）
 
-默认生成链路为：描述 → 真实 LLM 填充受约束的意图表 → 结构校验 → 确定性编译 → 结构复评。Schema 用 `kind` 描述算子（如 `dedupe` / `filter` / `date_part` / `aggregate` / `rate` / `sort`），校验输出 `unknown_column` / `unresolved_columns` 等结构化错误码。旧「模型直接输出规则 + 中文正则编译」链路保留为 `legacy`，仅供诊断。
+默认生成链路为：描述 → 真实 LLM 填充受约束的意图表 → 结构校验 → 确定性编译 → 结构复评。Schema 用 `kind` 描述算子（如 `dedupe` / `join` / `filter` / `date_part` / `aggregate` / `rate` / `sort`），校验输出 `unknown_column` / `unresolved_columns` / `unknown_source` 等结构化错误码。多表关联的 `right` 必须是已声明的附加表别名，维表列与派生列共同纳入真实列集合。旧「模型直接输出规则 + 中文正则编译」链路保留为 `legacy`，仅供诊断。
 
 ### 场景化展示模板
 
@@ -326,9 +326,10 @@ pytest -q -m real_llm                    # 运行真实模型用例（需 Key，
 
 python measure_prompt_accuracy.py        # 提示词正确率 → output/prompt_quality_report.json
 python evaluate_schema_accuracy.py       # Schema 主路径正确率 → output/schema_accuracy_report.md
+python verify_sqlite_matrix.py           # SQLite 全场景 /plan → /execute → /result → output/sqlite_matrix_report.md
 ```
 
-**最近基线**：离线 **834 passed / 28 skipped**；Vue 层 jsdom 验证 4/4 页挂载、6/6 提交契约；提示词场景 33/33、Schema 主路径 25/25 正确（模型 `glm-4-flash-250414`）。
+**最近基线**：离线 **872 passed / 29 skipped**；SQLite 全场景 **26/26**（数据源形态、Schema 分析、多表关联、13 个既有场景迁移、空表与异常 SQL）；Vue 层 jsdom 验证 4/4 页挂载、6/6 提交契约；提示词场景 33/33、Schema 主路径 25/25 正确（模型 `glm-4-flash-250414`）。
 
 ---
 
@@ -336,9 +337,11 @@ python evaluate_schema_accuracy.py       # Schema 主路径正确率 → output/
 
 - **不可信输入**：LLM 输出仅作文本解析，绝不直接执行；规则采用受限白名单 DSL，防注入、可校验、可审计。
 - **路径安全**：`source` 与下载路由校验本地普通文件，拒绝 URL、空字节与目录穿越；上传文件名清洗并限制在 `uploads/` 内。
+- **SQLite 只读**：表名按标识符转义，读取连接统一开启 `PRAGMA query_only = ON`；自定义 SQL 只能读，不能写入或删除数据库。
 - **数据保护**：过滤基于清洗前的原始列值，避免填充把「未成交」误判为已成交；缺失密集时自动回退，防止删空数据。
 - **可观测性**：日志只记录模型、耗时、响应长度与失败原因，绝不输出 API Key、文档全文或完整响应；CSV 用 `utf-8-sig` 便于 Excel 直接打开，数值不使用科学计数法。
 - **产品定位**：本地单机工具，不提供鉴权、多用户与网络暴露能力；Web 仅绑定 `127.0.0.1`。联网暴露与多用户场景属于后续规划。
 
+---
 
 *本地单机工具 · 核心管道仅依赖 pandas / numpy / openpyxl · 无 Key 时自然语言生成与文档抽取不可用，显式规则可离线执行。*
